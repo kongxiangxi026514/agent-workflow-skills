@@ -19,4 +19,4 @@ When a task needs literature, external web material, official docs, third-party 
 - Cite sources in research/spec/plan/retro outputs (URL / repo / commit) and note applicability boundaries.
 - Privacy: never send secrets, credentials, private snippets, or unnecessary workspace paths into queries — only generic API/concept/method names and public errors.
 - Workspace-trust fallback: if external evidence contradicts an established workspace fact/contract, preserve the workspace fact by default and ask the user before changing behavior.
-- Add a one-line attribution in the reply when a lookup was actually performed (e.g. `已查 Context7 (/org/project): …`).
+- Add a one-line attribution in the reply when a lookup was actually performed (e.g. `Checked Context7 (/org/project): …`).

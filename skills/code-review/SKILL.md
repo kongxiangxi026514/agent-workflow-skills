@@ -26,11 +26,11 @@ Any NEGATIVE assertion — "no tests / no references / unused / safe to delete /
 - Remove dead code / unused imports / stale shims (confirm no refs via the no-ignore check first — garbage does not get merged).
 - Give large refactors a rollback point (`git checkout -- <file>`), never patch-on-patch.
 
-## Adversarial review mode (对抗式审查)
+## Adversarial review mode
 
-用于安全 / 性能 / 并发敏感或高风险改动,叠加在上面 7 层之上;普通低风险改动只走 7 层即可。切换为严苛审查者视角,主动尝试打破代码。四个攻击维度,每条发现按 `[file:line] · 类型 · 影响 · 修复建议` 记录,并标 BLOCKING / NIT:
+For security / performance / concurrency-sensitive or high-risk changes; layered on top of the 7-layer pass above — ordinary low-risk changes only need the 7 layers. Switch to a harsh reviewer's perspective and actively try to break the code. Four attack dimensions; record each finding as `[file:line] | type | impact | suggested fix` and mark it BLOCKING / NIT:
 
-- **异常 / 边界输入** — malformed / 空 / 超大 / 编码 / 负数 / null;边界与 off-by-one。
-- **并发 / 状态** — race、共享可变状态、执行顺序、重入、死锁、部分失败。
-- **安全** — injection、path traversal、反序列化、密钥泄漏、未校验外部输入、越权。
-- **性能** — 热路径分配、N+1 / 二次复杂度、无界内存、阻塞 IO、缺少背压。
+- **Exceptional / boundary input** — malformed / empty / oversized / encoding / negative / null; boundaries and off-by-one.
+- **Concurrency / state** — races, shared mutable state, execution ordering, reentrancy, deadlock, partial failure.
+- **Security** — injection, path traversal, deserialization, secret leakage, unvalidated external input, privilege escalation.
+- **Performance** — hot-path allocation, N+1 / quadratic complexity, unbounded memory, blocking IO, missing backpressure.

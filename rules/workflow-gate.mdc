@@ -15,9 +15,9 @@ Commercial-grade, human-readable, mergeable production code — not AI-only demo
 - Path B (size hit + risk): skip brainstorm/plan/TDD, keep verification + optional review.
 - Path C (risk hit): full chain brainstorm → spec → plan → TDD → verify → review.
 - Path D (neither hit): simplified chain (1-2 clarifying questions → plan → TDD → verify).
-- User overrides win: "走完整流程/严格 TDD" → C; "快速改一下/别走完整流程" → A/B (verification still runs).
+- User overrides win: "full process / strict TDD" → C; "quick change / skip the full process" → A/B (verification still runs).
 
-Announce the first sentence, e.g. "本轮走简化主链(路径 D,…),…" — skipping the announcement is a violation.
+Announce the first sentence, e.g. "This turn takes the simplified chain (path D, …), …" — skipping the announcement is a violation.
 
 ## 2. Main-agent-led, subagent-heavy
 
@@ -27,7 +27,7 @@ Main agent orchestrates: scope, plan, dispatch, intake, synthesis, verification,
 
 `Grill Gate → Codebase/External Discovery → Design Brief → Batch Plan → dependency analysis (parallel vs serial subagents) → main-agent merge + write-conflict check + integrated verification → Acceptance Block → Closeout Block`. (Grill = ask 3-5 sharp questions on fuzzy ideas; see the `code-review`, `research-routing`, `parallel-dispatch`, `memory-gate` skills for those steps.)
 
-难 / 新 / 模糊的设计问题 → 调用 `first-principles` skill;安全 / 性能 / 并发敏感或高风险的审查 → 用 `code-review` 的 adversarial mode。日常 path-A/B 改动不必触发。
+Hard / novel / ambiguous design problems → invoke the `first-principles` skill; security / performance / concurrency-sensitive or high-risk reviews → use `code-review`'s adversarial mode. Routine path-A/B changes need not trigger these.
 
 ## 4. Code quality & architecture contract (the floor is 800/100 lines + diff ≤500)
 
@@ -39,7 +39,7 @@ Run real verification commands before saying "done/passing". Commit only the cur
 
 ## Metacognition checkpoint
 
-在关键节点(派发并行前 / path C·D 设计决策点 / 声称完成前)简答两问:(1) 你最没把握的是什么?(2) 最大的遗漏 / 我没意识到什么?Trivial path-A 轮次跳过,避免仪式化噪声。
+At key checkpoints (before dispatching parallel work / at path C/D design-decision points / before claiming completion), briefly answer two questions: (1) What are you least confident about? (2) What is the biggest omission / what am I not aware of? Skip trivial path-A turns to avoid ritual noise.
 
 ## Model routing (dynamic single point)
 

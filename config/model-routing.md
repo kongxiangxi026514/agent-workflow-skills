@@ -1,24 +1,24 @@
-# 模型路由(单点配置 / single source of truth)
+# Model Routing (single source of truth)
 
-本文件是**唯一**需要改的地方,用来定义"哪个角色用哪个模型"。改这里,workflow 脊柱与各工具的模型路由随之生效。
+This file is the **only** place to edit for defining "which role uses which model". Change it here, and the workflow spine and each tool's model routing follow.
 
-## 角色 → 模型
+## Role → model
 
-| 角色 | 职责 | Cursor slug |
+| Role | Responsibility | Cursor slug |
 | --- | --- | --- |
-| implementer | 实现 / 重构 / 调试 | `claude-opus-4-8-thinking-xhigh`(难任务升级 → `claude-opus-4-8-thinking-max`) |
-| reviewer | 审查 / 验证 | `gpt-5.5-extra-high` |
+| implementer | Implementation / refactor / debug | `claude-opus-4-8-thinking-xhigh` (escalate hard tasks → `claude-opus-4-8-thinking-max`) |
+| reviewer | Review / verification | `gpt-5.5-extra-high` |
 
-## 硬规则
+## Hard rules
 
-- **reviewer 必须与 implementer 属于不同模型家族**,规避同模型自我验证的盲区(cross-model verification)。
-- 非平凡改动:implementer 先实现 → reviewer 跨模型审查 → 主代理独立复验;契约级(D-risk)改动必须走完这三步,不接受 implementer 自我批准作为最终结论。
+- **The reviewer MUST be a different model family from the implementer**, to avoid the blind spot of same-model self-verification (cross-model verification).
+- Non-trivial changes: implementer implements → reviewer does a cross-model review → main agent independently re-verifies; contract-level (D-risk) changes MUST complete all three steps and never accept the implementer's self-approval as the final conclusion.
 
-## 动态换模型(改这里 = 单点)
+## Dynamically switching models (edit here = single point)
 
-- **Cursor**:改本文件的"角色 → 模型"表,并同步 `rules/workflow-gate.mdc` 里 `## Model routing (dynamic single point)` 段的 slug。派发子代理时,build 任务传 implementer 模型,review 任务传 reviewer 模型。
-- **OpenCode**:改 `opencode/opencode.json` 的 `agent.build.model` / `agent.review.model`。真实可用 id 用 `opencode models` 查(例:build 用 GLM 5.2、review 用 Kimi K2.6 —— 不同家族)。
+- **Cursor**: edit the "Role → model" table in this file, and sync the slugs in the `## Model routing (dynamic single point)` section of `rules/workflow-gate.mdc`. When dispatching subagents, pass the implementer model for build tasks and the reviewer model for review tasks.
+- **OpenCode**: edit `agent.build.model` / `agent.review.model` in `opencode/opencode.json`. Look up real available ids with `opencode models` (e.g. build with GLM 5.2, review with Kimi K2.6 — different families).
 
-## 成本策略
+## Cost strategy
 
-质量优先、成本次要但**主动管理**:机械活(格式化 / 批量改名 / 简单迁移)用够用的便宜快模型,设计 / 审查 / 验证等高价值环节用强模型;控制子代理数量与并行扇出,避免无意义的重复调研与重跑。
+Quality first, cost secondary but **actively managed**: use a cheap, fast, good-enough model for mechanical work (formatting / bulk renames / simple migrations), and reserve strong models for high-value steps like design / review / verification; control the number of subagents and the parallel fan-out, and avoid pointless duplicate research and re-runs.
