@@ -1,13 +1,13 @@
 # agent-workflow-skills
 
-> 一套可热插拔、跨工具(Cursor / OpenCode / Claude)的 AI 编码 agent 开发 workflow。**4 个按需 skill + 1 个强制常驻脊柱规则**,脚本一键安装,零手动拷贝。
+> 一套可热插拔、跨工具(Cursor / OpenCode / Claude)的 AI 编码 agent 开发 workflow。**5 个按需 skill + 1 个强制常驻脊柱规则**,脚本一键安装,零手动拷贝。
 
 ## 简介
 
 本仓库把一套"商业级质量优先"的开发 workflow 固化为两类资产:
 
-- **1 个强制脊柱规则**(`rules/workflow-gate.mdc`,`alwaysApply: true`):每轮自动生效的 A/B/C/D 路径门控 + 主/子代理编排 + 全流程 + 质量/架构契约 + 模型路由。它是**规则**,不是 skill —— 安装到项目后每轮强制触发,无需 agent 主动"拉取"。
-- **4 个按需 skill**(`skills/`):`code-review` / `research-routing` / `parallel-dispatch` / `memory-gate`,由 agent 按 `description` 在需要时自动发现调用。
+- **1 个强制脊柱规则**(`rules/workflow-gate.mdc`,`alwaysApply: true`):每轮自动生效的 A/B/C/D 路径门控 + 主/子代理编排 + 全流程 + 质量/架构契约 + 模型路由 + 元认知检查点。它是**规则**,不是 skill —— 安装到项目后每轮强制触发,无需 agent 主动"拉取"。
+- **5 个按需 skill**(`skills/`):`first-principles` / `code-review` / `research-routing` / `parallel-dispatch` / `memory-gate`,由 agent 按 `description` 在需要时自动发现调用。
 
 模型路由是**动态单点配置**:改一个地方(`config/model-routing.md` + OpenCode 的 `opencode.json`)即可换模型。安装/卸载全部走脚本,**不再需要手动拷贝任何文件**。
 
@@ -15,8 +15,9 @@
 
 | 路径 | 类型 | 角色 | 何时生效 |
 | --- | --- | --- | --- |
-| `rules/workflow-gate.mdc` | **强制规则** | 脊柱:每轮 A/B/C/D 门控 + 主/子编排 + 全流程 + 质量/架构契约 + 模型路由 | 每轮**强制**自动生效(`alwaysApply: true`) |
-| `skills/code-review/` | 按需 skill | 分层 7 层审查 + no-false-negative 复验 + 瘦身/重构纪律 | review diff / PR / 合并前 |
+| `rules/workflow-gate.mdc` | **强制规则** | 脊柱:每轮 A/B/C/D 门控 + 主/子编排 + 全流程 + 质量/架构契约 + 模型路由 + 元认知检查点 | 每轮**强制**自动生效(`alwaysApply: true`) |
+| `skills/first-principles/` | 按需 skill | 第一性原理拆解:难/新/模糊问题拆到不可再分、从零推导 + 元认知收尾 | 方案非显然 / 架构定稿前(难/新/模糊,通常 path C) |
+| `skills/code-review/` | 按需 skill | 分层 7 层审查 + no-false-negative 复验 + 瘦身/重构纪律;对抗式审查(高风险时叠加) | review diff / PR / 合并前 |
 | `skills/research-routing/` | 按需 skill | Context7 / Tavily / GitHub 调研路由 | 查文献 / 文档 / 三方库 / 源码 |
 | `skills/parallel-dispatch/` | 按需 skill | 并行 vs 串行拆解 + 角色化模型路由 + 上下文封顶 / 熔断 | 派发子代理前 |
 | `skills/memory-gate/` | 按需 skill | AGENTS.md 记忆更新 diff-review 双轨 gate | 任何 agent 想改长期记忆时 |
@@ -33,7 +34,7 @@ Windows / Cursor(把强制脊柱写进某个项目):
 .\install.ps1 -Tool cursor -Project D:\path\to\your-repo
 ```
 
-不带 `-Project` 只装 4 个 skill,并提示脊柱的写入方式(见下方"强制脊柱说明"):
+不带 `-Project` 只装 5 个 skill,并提示脊柱的写入方式(见下方"强制脊柱说明"):
 
 ```powershell
 .\install.ps1 -Tool cursor
@@ -96,9 +97,10 @@ OpenCode(全局 AGENTS.md 自动注入脊柱 + 全局 skills):
 
 ## 设计理念
 
-- **hybrid 结构**:1 个强制常驻脊柱 + 4 个按需 skill,职责清晰、可单独增删。
+- **hybrid 结构**:1 个强制常驻脊柱 + 5 个按需 skill,职责清晰、可单独增删。
 - **质量优先、成本次要但主动管理**:顶级模型留给设计 / 审查 / 验证,机械活用够用的便宜快模型;控制子代理数量与并行扇出。
 - **角色化模型路由**:implementer 与 reviewer 用**不同模型家族**,规避同模型自我验证盲区。
+- **分层触发,不做仪式**:强力模式按需叠加,不是每轮都跑 —— `first-principles`(难/新/模糊设计,通常 path C)、`code-review` 的 adversarial mode(安全/性能/并发敏感或高风险审查,叠加在 7 层之上)、脊柱的 metacognition checkpoint(仅关键节点:派发并行前 / path C·D 设计决策 / 声称完成前);trivial path-A 轮次一律跳过,避免噪声。
 
 ## 更多
 

@@ -27,6 +27,8 @@ Main agent orchestrates: scope, plan, dispatch, intake, synthesis, verification,
 
 `Grill Gate → Codebase/External Discovery → Design Brief → Batch Plan → dependency analysis (parallel vs serial subagents) → main-agent merge + write-conflict check + integrated verification → Acceptance Block → Closeout Block`. (Grill = ask 3-5 sharp questions on fuzzy ideas; see the `code-review`, `research-routing`, `parallel-dispatch`, `memory-gate` skills for those steps.)
 
+难 / 新 / 模糊的设计问题 → 调用 `first-principles` skill;安全 / 性能 / 并发敏感或高风险的审查 → 用 `code-review` 的 adversarial mode。日常 path-A/B 改动不必触发。
+
 ## 4. Code quality & architecture contract (the floor is 800/100 lines + diff ≤500)
 
 Self-documenting names; one thing per function; low cognitive complexity (nesting ≤3); extract a helper only on ≥2 repeats or cross-responsibility reuse; comments explain why/constraints/failure-modes, never narrate. No over-engineering / no demo residue (YAGNI). Delivery docstrings are plain PEP 257 / Google / NumPy style (not markdown), restrained like CVPR-grade open-source; delivery code (`src/**` + delivered scripts + configs) must NOT embed spec/plan/phase/batch/ADR/dev-process pointers — those live in docs, not shipped code. Layering: one-directional downward dependencies, separation of concerns, ADR for contract/architectural changes.
@@ -34,6 +36,10 @@ Self-documenting names; one thing per function; low cognitive complexity (nestin
 ## 5. Verify before claiming done; commit per topic
 
 Run real verification commands before saying "done/passing". Commit only the current topic's files by explicit path. On Windows/PowerShell, keep `git commit -m` messages free of literal double-quotes (they break arg parsing) or use `git commit -F <file>`.
+
+## Metacognition checkpoint
+
+在关键节点(派发并行前 / path C·D 设计决策点 / 声称完成前)简答两问:(1) 你最没把握的是什么?(2) 最大的遗漏 / 我没意识到什么?Trivial path-A 轮次跳过,避免仪式化噪声。
 
 ## Model routing (dynamic single point)
 

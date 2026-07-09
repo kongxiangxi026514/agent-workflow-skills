@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Install the agent-workflow-skills bundle (4 on-demand skills + 1 forced always-on spine rule)
+# Install the agent-workflow-skills bundle (5 on-demand skills + 1 forced always-on spine rule)
 # into a tool's config dir. Idempotent: re-running does not duplicate content.
 #
 # Usage:
