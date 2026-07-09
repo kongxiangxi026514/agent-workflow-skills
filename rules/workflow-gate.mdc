@@ -1,6 +1,6 @@
 ---
-name: workflow-gate
-description: Per-turn workflow spine for commercial-grade dev. Use at the start of every non-trivial coding turn to pick an execution path (A/B/C/D), run as main-agent orchestrator with subagents as the workforce, and drive the grill→discovery→design→batch→execute→acceptance→closeout flow. Triggers on any implementation, refactor, debugging, or design task.
+description: Always-on workflow spine — per-turn A/B/C/D gate, main/subagent orchestration, model routing, code-quality & architecture contract.
+alwaysApply: true
 ---
 
 # Workflow Gate (spine)
@@ -35,8 +35,6 @@ Self-documenting names; one thing per function; low cognitive complexity (nestin
 
 Run real verification commands before saying "done/passing". Commit only the current topic's files by explicit path. On Windows/PowerShell, keep `git commit -m` messages free of literal double-quotes (they break arg parsing) or use `git commit -F <file>`.
 
-## Make this always-on (optional, recommended)
+## Model routing (dynamic single point)
 
-A skill is pull-based. For a guaranteed per-turn gate:
-- Cursor: paste sections 1-2 into Settings → Rules (User Rules).
-- OpenCode: put them in `~/.config/opencode/AGENTS.md` (global, always loaded).
+Implementer/refactor/debug work uses the **implementer** model; review/verification uses the **reviewer** model, which MUST be a different model family (no same-model self-verification). Concrete current assignment (Cursor slugs): implementer = `claude-opus-4-8-thinking-xhigh` (escalate hard tasks to `claude-opus-4-8-thinking-max`); reviewer = `gpt-5.5-extra-high`. To change models, edit `config/model-routing.md` (and for OpenCode `opencode.json`) — that config is the single source of truth. When dispatching subagents, pass the implementer model for build tasks and the reviewer model for review tasks.

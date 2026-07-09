@@ -1,0 +1,6 @@
+# Keep shell scripts LF on every platform so bash never chokes on CR.
+*.sh text eol=lf
+# Config / rule / doc text files: normalize to LF in the repo.
+*.md text eol=lf
+*.mdc text eol=lf
+*.json text eol=lf

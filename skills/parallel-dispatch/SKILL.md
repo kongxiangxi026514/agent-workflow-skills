@@ -12,10 +12,12 @@ description: Decide parallel vs serial subagent decomposition, apply role-based 
 - Before parallelizing, compute whether it is worth it (parallel multiplies token cost); if not clearly independent, keep one worker (it may split internally).
 - After parallel workers return, the main agent merges, checks for write conflicts / interface drift, and runs integrated verification before accepting.
 
-## Role-based model routing (identity is the single knob, not hardcoded slugs)
+## Role-based model routing (single source = `config/model-routing.md`)
 
-- Implement / refactor / debug → the strong implementer model (this workspace: `claude-opus-4-8-thinking-xhigh`, or `…-max` for hard tasks; OpenCode: `agent.build.model`).
-- Review / verification → a DIFFERENT model family (this workspace: `gpt-5.5-extra-high`; OpenCode: `agent.review.model`). No same-model self-verification.
+- Routing is by ROLE, not hardcoded here. The single source of truth is `config/model-routing.md` (and, for OpenCode, `opencode.json` `agent.build.model` / `agent.review.model`); change models there.
+- Implement / refactor / debug → the **implementer** model (current: `claude-opus-4-8-thinking-xhigh`, escalate hard tasks to `claude-opus-4-8-thinking-max`; OpenCode: `agent.build.model`).
+- Review / verification → the **reviewer** model, a DIFFERENT model family (current: `gpt-5.5-extra-high`; OpenCode: `agent.review.model`). No same-model self-verification.
+- When dispatching subagents: pass the implementer model for build tasks and the reviewer model for review tasks.
 - Quality first, cost is secondary — but actively manage cost/time: pick the cheapest model that meets the quality bar for mechanical work, reserve top models for design/review/verification.
 
 ## Context budget + circuit breaker

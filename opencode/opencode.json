@@ -1,0 +1,8 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "instructions": ["AGENTS.md"],
+  "agent": {
+    "build":  { "mode": "primary",  "description": "Implementer/orchestrator. Model identity is the single routing knob.", "model": "REPLACE_WITH_IMPL_MODEL_ID" },
+    "review": { "mode": "subagent", "description": "Cross-model reviewer/verifier; MUST be a different family than build.", "model": "REPLACE_WITH_REVIEW_MODEL_ID", "permission": { "edit": "deny" } }
+  }
+}
