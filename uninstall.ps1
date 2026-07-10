@@ -46,6 +46,19 @@ function Read-Utf8([string]$Path) {
     return [System.IO.File]::ReadAllText($Path, $Utf8Strict)
 }
 
+function Test-SpineMarkerIntegrity([string]$File) {
+    if (-not (Test-Path -LiteralPath $File)) { return }
+    $content = Read-Utf8 $File
+    $beginCount = [regex]::Matches($content, [regex]::Escape($BeginMarker)).Count
+    $endCount = [regex]::Matches($content, [regex]::Escape($EndMarker)).Count
+    if ($beginCount -eq 0 -and $endCount -eq 0) { return }
+    $bi = $content.IndexOf($BeginMarker)
+    $ei = $content.IndexOf($EndMarker)
+    if ($beginCount -ne 1 -or $endCount -ne 1 -or $ei -lt $bi) {
+        throw "Corrupted agent-workflow-skills spine markers in $File. Nothing was uninstalled."
+    }
+}
+
 function Remove-Skills([string]$DestSkillsDir) {
     # Only remove the skill folders that this bundle ships (never a whole skills dir).
     if (-not (Test-Path $DestSkillsDir)) { return }
@@ -60,6 +73,7 @@ function Remove-SpineBlock([string]$File) {
     if (-not (Test-Path $File)) { return }
     $content = Read-Utf8 $File
     if ($null -eq $content) { return }
+    Test-SpineMarkerIntegrity $File
     $bi = $content.IndexOf($BeginMarker)
     $ei = $content.IndexOf($EndMarker)
     if ($bi -lt 0 -or $ei -lt $bi) { return }
@@ -89,7 +103,7 @@ function Uninstall-OpenCode {
     $agents = Join-Path $base 'AGENTS.md'
     Remove-SpineBlock $agents
     $summary.Add("opencode: removed spine marker block from $agents")
-    foreach ($name in @('build.md', 'review.md')) {
+    foreach ($name in @('build.md', 'reason.md', 'review.md')) {
         $path = Join-Path $base "agents\$name"
         if ((Test-Path -LiteralPath $path) -and (Read-Utf8 $path).Contains($AgentMarker)) {
             Remove-Item -Force -LiteralPath $path
@@ -105,6 +119,13 @@ function Uninstall-Claude {
     $claudeMd = Join-Path $base 'CLAUDE.md'
     Remove-SpineBlock $claudeMd
     $summary.Add("claude: removed spine marker block from $claudeMd")
+}
+
+if ($Tool -eq 'opencode' -or $Tool -eq 'all') {
+    Test-SpineMarkerIntegrity (Join-Path $env:USERPROFILE '.config\opencode\AGENTS.md')
+}
+if ($Tool -eq 'claude' -or $Tool -eq 'all') {
+    Test-SpineMarkerIntegrity (Join-Path $env:USERPROFILE '.claude\CLAUDE.md')
 }
 
 switch ($Tool) {

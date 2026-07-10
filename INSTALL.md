@@ -13,7 +13,7 @@
 | `skills/parallel-dispatch/` | 按需 skill | 并行 vs 串行拆解 + 角色化模型路由(引用单点)+ 上下文封顶/熔断 |
 | `skills/memory-gate/` | 按需 skill | AGENTS.md 记忆更新 diff-review 双轨 gate |
 | `config/model-routing.md` | 配置 | 模型路由单一真源(角色 → 模型) |
-| `opencode/agents/{build,review}.md` | 配置 | OpenCode 原生 agent;不写用户主配置 |
+| `opencode/agents/{build,reason,review}.md` | 配置 | OpenCode 原生三角色 agent;不写用户主配置 |
 
 ## 脚本参数
 
@@ -45,7 +45,7 @@
 | Cursor(带 Project) | `rules/workflow-gate.mdc` | `<project>/.cursor/rules/workflow-gate.mdc` |
 | OpenCode | `skills/*` | `~/.config/opencode/skills/<skill>/` |
 | OpenCode | `rules/workflow-gate.mdc` | `~/.config/opencode/AGENTS.md` 标记块 |
-| OpenCode | `opencode/agents/*.md` | `~/.config/opencode/agents/*.md` |
+| OpenCode | `opencode/agents/{build,reason,review}.md` | `~/.config/opencode/agents/{build,reason,review}.md` |
 | Claude | `skills/*` + spine | `~/.claude/skills/<skill>/` + `~/.claude/CLAUDE.md` 标记块 |
 
 脚本自动完成全部复制和注入,无需 agent 或用户再手工移动文件。OpenCode 运行中的会话需在安装后重启。
@@ -53,19 +53,24 @@
 ## OpenCode 安装(逐步)
 
 ```bash
-./install.sh --tool opencode
+./install.sh --tool opencode \
+  --opencode-build-model provider/build-id \
+  --opencode-reason-model provider/reason-id \
+  --opencode-review-model different-provider/review-id
 ```
 
 - `skills/*` → `~/.config/opencode/skills/<skill>/SKILL.md`。
 - 脊柱正文(已剥离 `.mdc` frontmatter)幂等注入 `~/.config/opencode/AGENTS.md`(全局始终加载),用 `<!-- BEGIN agent-workflow-skills spine -->` / `<!-- END agent-workflow-skills spine -->` 标记块包裹。
-- `opencode/agents/{build,review}.md` → `~/.config/opencode/agents/`,由 OpenCode 原生发现;build 遵循 Terra 默认 / Sol 深推理升级,review 使用不同家族 GLM。
-- 用户的 `opencode.json` 或 `opencode.jsonc` 仅做严格 UTF-8 + JSON/JSONC 语法预检,安装前后字节完全相同;不存在时也不会创建。若两者同时存在、配置损坏或同名 agent 不是本包所有,脚本在任何写入前失败并给出路径。
+- `opencode/agents/{build,reason,review}.md` → `~/.config/opencode/agents/`,安装器按三个 ID 渲染 frontmatter 的 `model:`;无需手动移动或编辑。每次都复制 5 个 skill、注入脊柱并渲染三份 agent。
+- 先运行 `opencode models`,传入其中准确的 provider/model ID。PowerShell 用 `-OpenCodeBuildModel` / `-OpenCodeReasonModel` / `-OpenCodeReviewModel`;bash 用上述三个 `--opencode-*-model`。环境变量后备是 `AGENT_WORKFLOW_OPENCODE_BUILD_MODEL` / `AGENT_WORKFLOW_OPENCODE_REASON_MODEL` / `AGENT_WORKFLOW_OPENCODE_REVIEW_MODEL`。ID 必须匹配保守单行 YAML 标量 `^[A-Za-z0-9][A-Za-z0-9._-]*(/[A-Za-z0-9][A-Za-z0-9._-]*)+$`,且拒绝空值、控制字符与占位符;review ID 必须不同于 build/reason。字符串不同不能证明家族不同,用户必须选择真实不同 provider/model family 进行 review。
+- 用户的 `opencode.json` 或 `opencode.jsonc` 仅做严格 UTF-8 + JSON/JSONC 语法预检,安装前后字节完全相同;不存在时也不会创建。若两者同时存在、配置损坏、标记块损坏或任一同名 agent 不是本包所有,脚本在任何写入前失败并给出路径。安装后重启 OpenCode。
 - PowerShell 5.1 使用显式 UTF-8 无 BOM 读写和 UTF-8 console encoding;已有主配置的语法预检需要 Python 3,bash/Python 均强制 UTF-8。注入文件采用临时文件后替换,降低中断写入风险。
 
 ## 模型路由
 
 - Cursor:Terra `gpt-5.6-terra-xhigh` 负责实现/重构/调试与常规架构;Sol `gpt-5.6-sol-xhigh` 仅处理真正复杂、困难、需要深度推理的设计或诊断;GLM `glm-5.2-max` 负责审查/验证。
 - GLM reviewer 必须与 Terra implementer、Sol reasoner 都属于不同模型家族。具体升级条件和单一真源见 `config/model-routing.md`;修改后同步 `rules/workflow-gate.mdc` 与 `skills/parallel-dispatch/SKILL.md`。
+- OpenCode 使用安装器绑定的 provider/model ID,不自动映射上述 Cursor slug,也不修改或创建主配置。
 
 ## Claude 安装(逐步)
 
@@ -80,7 +85,7 @@
 
 - **skills**:每次安装先删同名目标文件夹再拷贝,保证内容与仓库一致、不残留旧文件。
 - **AGENTS.md / CLAUDE.md 脊柱注入**:用标记块定位。若标记块已存在则**原地替换**,否则追加;文件不存在则创建。因此重复运行只会保留**一个**脊柱块,不会累积。文件里标记块以外的内容原样保留。
-- **OpenCode agents**:仅覆盖带本包 ownership marker 的 `build.md` / `review.md`;遇到同名用户文件会失败,不会猜测。
+- **OpenCode agents**:仅覆盖带本包 ownership marker 的 `build.md` / `reason.md` / `review.md`;遇到任一同名用户文件会失败,不会猜测。带新 ID 重装时只更新本包拥有的 agent。
 - **opencode.json / opencode.jsonc**:永不改写;支持注释和尾逗号的 JSONC,也不会创建竞争文件。
 
 ## 卸载 / 热插拔
@@ -99,7 +104,7 @@
 
 - 删掉本包拷入的 skill 文件夹(只删本包自带的 5 个名字,不动目标目录里的其它 skill)。
 - 移除 `AGENTS.md` / `CLAUDE.md` 里的脊柱标记块,保留文件其余内容。
-- 只删除带 ownership marker 的 OpenCode `agents/build.md` / `agents/review.md`,不删同名用户文件。
+- 只删除带 ownership marker 的 OpenCode `agents/build.md` / `agents/reason.md` / `agents/review.md`,不删同名用户文件。
 - `-Project` 给定时删掉 `<repo>\.cursor\rules\workflow-gate.mdc`。
 - `opencode.json` / `opencode.jsonc` **不会被修改或删除**。
 - 已不存在的项直接跳过,不报错。

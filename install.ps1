@@ -18,7 +18,10 @@
 param(
     [ValidateSet('cursor', 'opencode', 'claude', 'all')]
     [string]$Tool = 'cursor',
-    [string]$Project
+    [string]$Project,
+    [string]$OpenCodeBuildModel,
+    [string]$OpenCodeReasonModel,
+    [string]$OpenCodeReviewModel
 )
 
 $ErrorActionPreference = 'Stop'
@@ -52,9 +55,45 @@ function Read-Utf8([string]$Path) {
 function Resolve-Python {
     foreach ($name in @('python3', 'python')) {
         $command = Get-Command $name -ErrorAction SilentlyContinue
-        if ($command) { return $command.Source }
+        if ($command) {
+            & $command.Source -c 'import sys; raise SystemExit(0 if sys.version_info.major == 3 else 1)'
+            if ($LASTEXITCODE -eq 0) { return $command.Source }
+        }
     }
-    throw 'Python 3 is required to validate an existing OpenCode JSON/JSONC config safely.'
+    throw 'A runnable Python 3 interpreter is required to validate an existing OpenCode JSON/JSONC config safely.'
+}
+
+function Resolve-OpenCodeModel([string]$Role, [string]$Value, [string]$EnvName) {
+    if ([string]::IsNullOrEmpty($Value)) { $Value = [Environment]::GetEnvironmentVariable($EnvName) }
+    $reserved = @('provider', 'model', 'placeholder', 'example', 'change-me', 'your-provider', 'your-model')
+    if ([string]::IsNullOrWhiteSpace($Value) -or $Value -match '[\r\n\p{Cc}]' -or
+        $Value -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]*(/[A-Za-z0-9][A-Za-z0-9._-]*)+$' -or
+        (@($Value -split '/') | Where-Object { $reserved -contains $_.ToLowerInvariant() }).Count -gt 0) {
+        throw "OpenCode $Role model is required as a safe provider/model ID. Run 'opencode models' and pass an exact available ID with the matching -OpenCode${Role}Model flag or $EnvName."
+    }
+    return $Value
+}
+
+function Resolve-OpenCodeModels {
+    $script:OpenCodeBuildModel = Resolve-OpenCodeModel 'Build' $OpenCodeBuildModel 'AGENT_WORKFLOW_OPENCODE_BUILD_MODEL'
+    $script:OpenCodeReasonModel = Resolve-OpenCodeModel 'Reason' $OpenCodeReasonModel 'AGENT_WORKFLOW_OPENCODE_REASON_MODEL'
+    $script:OpenCodeReviewModel = Resolve-OpenCodeModel 'Review' $OpenCodeReviewModel 'AGENT_WORKFLOW_OPENCODE_REVIEW_MODEL'
+    if ($script:OpenCodeReviewModel -eq $script:OpenCodeBuildModel -or $script:OpenCodeReviewModel -eq $script:OpenCodeReasonModel) {
+        throw "OpenCode review model must differ from build and reason models. Select exact IDs from 'opencode models' before installation."
+    }
+}
+
+function Test-SpineMarkerIntegrity([string]$File) {
+    if (-not (Test-Path -LiteralPath $File)) { return }
+    $content = Read-Utf8 $File
+    $beginCount = [regex]::Matches($content, [regex]::Escape($BeginMarker)).Count
+    $endCount = [regex]::Matches($content, [regex]::Escape($EndMarker)).Count
+    if ($beginCount -eq 0 -and $endCount -eq 0) { return }
+    $bi = $content.IndexOf($BeginMarker)
+    $ei = $content.IndexOf($EndMarker)
+    if ($beginCount -ne 1 -or $endCount -ne 1 -or $ei -lt $bi) {
+        throw "Corrupted agent-workflow-skills spine markers in $File. Nothing was installed."
+    }
 }
 
 function Test-OpenCodeConfig {
@@ -70,7 +109,7 @@ function Test-OpenCodeConfig {
         & $python (Join-Path $RepoRoot 'tools\validate_jsonc.py') $config
         if ($LASTEXITCODE -ne 0) { throw "Invalid OpenCode config: $config. Nothing was installed." }
     }
-    foreach ($name in @('build.md', 'review.md')) {
+    foreach ($name in @('build.md', 'reason.md', 'review.md')) {
         $agent = Join-Path $base "agents\$name"
         if ((Test-Path -LiteralPath $agent) -and -not (Read-Utf8 $agent).Contains($AgentMarker)) {
             throw "OpenCode agent already exists and is not bundle-owned: $agent. Nothing was installed."
@@ -102,6 +141,7 @@ function Set-SpineBlock([string]$File) {
     if (Test-Path $File) {
         $content = Read-Utf8 $File
         if ($null -eq $content) { $content = '' }
+        Test-SpineMarkerIntegrity $File
         $bi = $content.IndexOf($BeginMarker)
         $ei = $content.IndexOf($EndMarker)
         if ($bi -ge 0 -and $ei -ge $bi) {
@@ -140,10 +180,13 @@ function Install-OpenCode {
     $summary.Add("opencode: spine injected -> $agents (marker block)")
     $agentDir = Join-Path $base 'agents'
     if (-not (Test-Path $agentDir)) { New-Item -ItemType Directory -Path $agentDir -Force | Out-Null }
-    foreach ($name in @('build.md', 'review.md')) {
-        Copy-Item -Force -LiteralPath (Join-Path $RepoRoot "opencode\agents\$name") -Destination (Join-Path $agentDir $name)
+    $models = @{ 'build.md' = $script:OpenCodeBuildModel; 'reason.md' = $script:OpenCodeReasonModel; 'review.md' = $script:OpenCodeReviewModel }
+    foreach ($name in @('build.md', 'reason.md', 'review.md')) {
+        $template = Read-Utf8 (Join-Path $RepoRoot "opencode\agents\$name")
+        if (-not $template.Contains('__OPENCODE_MODEL__')) { throw "OpenCode agent template is missing its model placeholder: $name" }
+        Write-NoBom (Join-Path $agentDir $name) $template.Replace('__OPENCODE_MODEL__', $models[$name])
     }
-    $summary.Add("opencode: native agents -> $agentDir\{build,review}.md")
+    $summary.Add("opencode: native agents -> $agentDir\{build,reason,review}.md")
     $configLabel = if ($script:OpenCodeConfig) { $script:OpenCodeConfig } else { 'none present; none created' }
     $summary.Add("opencode: main config untouched -> $configLabel")
 }
@@ -162,7 +205,12 @@ if (($Tool -eq 'cursor' -or $Tool -eq 'all') -and -not $Project) {
     throw '-Project is required for Cursor installation so the forced spine is installed automatically. Nothing was installed.'
 }
 if ($Tool -eq 'opencode' -or $Tool -eq 'all') {
+    Resolve-OpenCodeModels
     $script:OpenCodeConfig = Test-OpenCodeConfig
+    Test-SpineMarkerIntegrity (Join-Path $env:USERPROFILE '.config\opencode\AGENTS.md')
+}
+if ($Tool -eq 'claude' -or $Tool -eq 'all') {
+    Test-SpineMarkerIntegrity (Join-Path $env:USERPROFILE '.claude\CLAUDE.md')
 }
 
 switch ($Tool) {

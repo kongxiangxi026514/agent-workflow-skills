@@ -24,10 +24,11 @@ def normalize_jsonc(text):
                 break
             result.append("\n")
         elif text.startswith("/*", index):
-            index = text.find("*/", index + 2)
-            if index < 0:
+            end = text.find("*/", index + 2)
+            if end < 0:
                 raise ValueError("unterminated block comment")
-            index += 1
+            result.extend(char if char in "\r\n" else " " for char in text[index:end + 2])
+            index = end + 1
         elif char == ",":
             probe = index + 1
             while probe < len(text):
@@ -36,6 +37,7 @@ def normalize_jsonc(text):
                 elif text.startswith("//", probe):
                     probe = text.find("\n", probe + 2)
                     if probe < 0:
+                        probe = len(text)
                         break
                 elif text.startswith("/*", probe):
                     probe = text.find("*/", probe + 2)

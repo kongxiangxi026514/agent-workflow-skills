@@ -1,6 +1,7 @@
 ---
 description: Configured implementation and orchestration agent.
+model: __OPENCODE_MODEL__
 mode: primary
 ---
-Follow the workflow spine: use Terra for normal work and escalate to Sol only for qualifying difficult reasoning.
+Follow the workflow spine: use this configured build model for normal work and delegate qualifying difficult reasoning to the configured reason agent.
 <!-- Managed by agent-workflow-skills. -->

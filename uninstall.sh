@@ -39,15 +39,25 @@ remove_skills() {
   done
 }
 
+assert_spine_markers() {
+  file="$1"; [ -f "$file" ] || return 0
+  begin_count="$(grep -Fxc "$BEGIN_MARKER" "$file" || true)"
+  end_count="$(grep -Fxc "$END_MARKER" "$file" || true)"
+  if [ "$begin_count" = 0 ] && [ "$end_count" = 0 ]; then return 0; fi
+  begin_line="$(grep -Fnx "$BEGIN_MARKER" "$file" | cut -d: -f1)"
+  end_line="$(grep -Fnx "$END_MARKER" "$file" | cut -d: -f1)"
+  if [ "$begin_count" != 1 ] || [ "$end_count" != 1 ] || [ "$begin_line" -ge "$end_line" ]; then
+    echo "Corrupted agent-workflow-skills spine markers in $file. Nothing was uninstalled." >&2; return 1
+  fi
+}
+
 remove_spine_block() {
   file="$1"
   [ -f "$file" ] || return 0
+  assert_spine_markers "$file"
+  grep -Fqx "$BEGIN_MARKER" "$file" || return 0
   tmp="$(mktemp "${file}.tmp.XXXXXX")"
-  awk -v b="$BEGIN_MARKER" -v e="$END_MARKER" '
-    $0==b { skip=1 }
-    skip!=1 { print }
-    $0==e { skip=0 }
-  ' "$file" > "$tmp"
+  sed -e "\|^${BEGIN_MARKER}$|,\|^${END_MARKER}$|d" "$file" > "$tmp"
   mv -f "$tmp" "$file"
 }
 
@@ -68,7 +78,7 @@ uninstall_opencode() {
   SUMMARY+=("opencode: removed bundle skills from $base/skills")
   remove_spine_block "$base/AGENTS.md"
   SUMMARY+=("opencode: removed spine marker block from $base/AGENTS.md")
-  for agent in "$base/agents/build.md" "$base/agents/review.md"; do
+  for agent in "$base/agents/build.md" "$base/agents/reason.md" "$base/agents/review.md"; do
     if [ -f "$agent" ] && grep -Fq "$AGENT_MARKER" "$agent"; then rm -f "$agent"; fi
   done
   SUMMARY+=("opencode: processed native agents in $base/agents (removed only when bundle-owned; main config untouched)")
@@ -81,6 +91,9 @@ uninstall_claude() {
   remove_spine_block "$base/CLAUDE.md"
   SUMMARY+=("claude: removed spine marker block from $base/CLAUDE.md")
 }
+
+if [ "$TOOL" = opencode ] || [ "$TOOL" = all ]; then assert_spine_markers "$HOME/.config/opencode/AGENTS.md"; fi
+if [ "$TOOL" = claude ] || [ "$TOOL" = all ]; then assert_spine_markers "$HOME/.claude/CLAUDE.md"; fi
 
 case "$TOOL" in
   cursor)   uninstall_cursor ;;

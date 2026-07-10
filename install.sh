@@ -9,6 +9,9 @@ set -euo pipefail
 
 TOOL="cursor"
 PROJECT=""
+OPENCODE_BUILD_MODEL="${AGENT_WORKFLOW_OPENCODE_BUILD_MODEL:-}"
+OPENCODE_REASON_MODEL="${AGENT_WORKFLOW_OPENCODE_REASON_MODEL:-}"
+OPENCODE_REVIEW_MODEL="${AGENT_WORKFLOW_OPENCODE_REVIEW_MODEL:-}"
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -16,6 +19,12 @@ while [ $# -gt 0 ]; do
     --tool=*) TOOL="${1#*=}"; shift ;;
     --project) PROJECT="${2:-}"; shift 2 ;;
     --project=*) PROJECT="${1#*=}"; shift ;;
+    --opencode-build-model) OPENCODE_BUILD_MODEL="${2:-}"; shift 2 ;;
+    --opencode-build-model=*) OPENCODE_BUILD_MODEL="${1#*=}"; shift ;;
+    --opencode-reason-model) OPENCODE_REASON_MODEL="${2:-}"; shift 2 ;;
+    --opencode-reason-model=*) OPENCODE_REASON_MODEL="${1#*=}"; shift ;;
+    --opencode-review-model) OPENCODE_REVIEW_MODEL="${2:-}"; shift 2 ;;
+    --opencode-review-model=*) OPENCODE_REVIEW_MODEL="${1#*=}"; shift ;;
     -h|--help)
       grep '^#' "$0" | sed 's/^# \{0,1\}//'
       exit 0 ;;
@@ -31,9 +40,48 @@ OPENCODE_CONFIG=""
 AGENT_MARKER='<!-- Managed by agent-workflow-skills. -->'
 
 resolve_python() {
-  if command -v python3 >/dev/null 2>&1; then printf '%s\n' python3
-  elif command -v python >/dev/null 2>&1; then printf '%s\n' python
-  else echo "Python 3 is required to validate an existing OpenCode JSON/JSONC config safely." >&2; return 1
+  for candidate in python3 python; do
+    if command -v "$candidate" >/dev/null 2>&1 && "$candidate" -c 'import sys; raise SystemExit(sys.version_info.major != 3)'; then
+      printf '%s\n' "$candidate"; return 0
+    fi
+  done
+  echo "A runnable Python 3 interpreter is required to validate an existing OpenCode JSON/JSONC config safely." >&2; return 1
+}
+
+validate_opencode_model() {
+  role="$1"; value="$2"; env_name="$3"
+  if [ -z "$value" ] || [[ "$value" =~ [[:cntrl:]] ]] ||
+    ! [[ "$value" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*(/[A-Za-z0-9][A-Za-z0-9._-]*)+$ ]]; then
+    echo "OpenCode $role model is required as a safe provider/model ID. Run 'opencode models' and pass an exact available ID with --opencode-${role}-model or $env_name." >&2
+    return 1
+  fi
+  IFS=/ read -ra parts <<< "$value"
+  for part in "${parts[@]}"; do
+    case "$(printf '%s' "$part" | tr '[:upper:]' '[:lower:]')" in
+      provider|model|placeholder|example|change-me|your-provider|your-model)
+        echo "OpenCode $role model must not use a placeholder token. Run 'opencode models' for an exact available ID." >&2; return 1 ;;
+    esac
+  done
+}
+
+validate_opencode_models() {
+  validate_opencode_model build "$OPENCODE_BUILD_MODEL" AGENT_WORKFLOW_OPENCODE_BUILD_MODEL || return 1
+  validate_opencode_model reason "$OPENCODE_REASON_MODEL" AGENT_WORKFLOW_OPENCODE_REASON_MODEL || return 1
+  validate_opencode_model review "$OPENCODE_REVIEW_MODEL" AGENT_WORKFLOW_OPENCODE_REVIEW_MODEL || return 1
+  if [ "$OPENCODE_REVIEW_MODEL" = "$OPENCODE_BUILD_MODEL" ] || [ "$OPENCODE_REVIEW_MODEL" = "$OPENCODE_REASON_MODEL" ]; then
+    echo "OpenCode review model must differ from build and reason models. Select exact IDs from 'opencode models' before installation." >&2; return 1
+  fi
+}
+
+assert_spine_markers() {
+  file="$1"; [ -f "$file" ] || return 0
+  begin_count="$(grep -Fxc "$BEGIN_MARKER" "$file" || true)"
+  end_count="$(grep -Fxc "$END_MARKER" "$file" || true)"
+  if [ "$begin_count" = 0 ] && [ "$end_count" = 0 ]; then return 0; fi
+  begin_line="$(grep -Fnx "$BEGIN_MARKER" "$file" | cut -d: -f1)"
+  end_line="$(grep -Fnx "$END_MARKER" "$file" | cut -d: -f1)"
+  if [ "$begin_count" != 1 ] || [ "$end_count" != 1 ] || [ "$begin_line" -ge "$end_line" ]; then
+    echo "Corrupted agent-workflow-skills spine markers in $file. Nothing was installed." >&2; return 1
   fi
 }
 
@@ -53,7 +101,7 @@ preflight_opencode() {
     PYTHONUTF8=1 PYTHONIOENCODING=utf-8 "$python_cmd" "$REPO_ROOT/tools/validate_jsonc.py" "$OPENCODE_CONFIG" ||
       { echo "Invalid OpenCode config: $OPENCODE_CONFIG. Nothing was installed." >&2; return 1; }
   fi
-  for agent in "$base/agents/build.md" "$base/agents/review.md"; do
+  for agent in "$base/agents/build.md" "$base/agents/reason.md" "$base/agents/review.md"; do
     if [ -f "$agent" ] && ! grep -Fq "$AGENT_MARKER" "$agent"; then
       echo "OpenCode agent already exists and is not bundle-owned: $agent. Nothing was installed." >&2
       return 1
@@ -85,11 +133,12 @@ set_spine_block() {
   mkdir -p "$(dirname "$file")"
   tmp="$(mktemp "${file}.tmp.XXXXXX")"
   if [ -f "$file" ]; then
-    awk -v b="$BEGIN_MARKER" -v e="$END_MARKER" '
-      $0==b { skip=1 }
-      skip!=1 { print }
-      $0==e { skip=0 }
-    ' "$file" > "$tmp"
+    assert_spine_markers "$file"
+    if grep -Fqx "$BEGIN_MARKER" "$file"; then
+      sed -e "\|^${BEGIN_MARKER}$|,\|^${END_MARKER}$|d" "$file" > "$tmp"
+    else
+      cat "$file" > "$tmp"
+    fi
   fi
   {
     if [ -s "$tmp" ]; then printf '\n'; fi
@@ -98,6 +147,14 @@ set_spine_block() {
     printf '%s\n' "$END_MARKER"
   } >> "$tmp"
   mv -f "$tmp" "$file"
+}
+
+render_opencode_agent() {
+  name="$1"; model="$2"; dest="$3"; source="$REPO_ROOT/opencode/agents/$name.md"
+  if ! grep -Fq '__OPENCODE_MODEL__' "$source"; then
+    echo "OpenCode agent template is missing its model placeholder: $name.md" >&2; return 1
+  fi
+  sed "s|__OPENCODE_MODEL__|$model|g" "$source" > "$dest"
 }
 
 install_cursor() {
@@ -117,9 +174,10 @@ install_opencode() {
   set_spine_block "$base/AGENTS.md"
   SUMMARY+=("opencode: spine injected -> $base/AGENTS.md (marker block)")
   mkdir -p "$base/agents"
-  cp -f "$REPO_ROOT/opencode/agents/build.md" "$base/agents/build.md"
-  cp -f "$REPO_ROOT/opencode/agents/review.md" "$base/agents/review.md"
-  SUMMARY+=("opencode: native agents -> $base/agents/{build,review}.md")
+  render_opencode_agent build "$OPENCODE_BUILD_MODEL" "$base/agents/build.md"
+  render_opencode_agent reason "$OPENCODE_REASON_MODEL" "$base/agents/reason.md"
+  render_opencode_agent review "$OPENCODE_REVIEW_MODEL" "$base/agents/review.md"
+  SUMMARY+=("opencode: native agents -> $base/agents/{build,reason,review}.md")
   config_label="${OPENCODE_CONFIG:-none present; none created}"
   SUMMARY+=("opencode: main config untouched -> $config_label")
 }
@@ -136,7 +194,12 @@ if { [ "$TOOL" = cursor ] || [ "$TOOL" = all ]; } && [ -z "$PROJECT" ]; then
   echo "--project is required for Cursor installation so the forced spine is installed automatically. Nothing was installed." >&2
   exit 1
 fi
-if [ "$TOOL" = opencode ] || [ "$TOOL" = all ]; then preflight_opencode; fi
+if [ "$TOOL" = opencode ] || [ "$TOOL" = all ]; then
+  validate_opencode_models
+  preflight_opencode
+  assert_spine_markers "$HOME/.config/opencode/AGENTS.md"
+fi
+if [ "$TOOL" = claude ] || [ "$TOOL" = all ]; then assert_spine_markers "$HOME/.claude/CLAUDE.md"; fi
 
 case "$TOOL" in
   cursor)   install_cursor ;;
