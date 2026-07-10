@@ -13,14 +13,14 @@
 | `skills/parallel-dispatch/` | 按需 skill | 并行 vs 串行拆解 + 角色化模型路由(引用单点)+ 上下文封顶/熔断 |
 | `skills/memory-gate/` | 按需 skill | AGENTS.md 记忆更新 diff-review 双轨 gate |
 | `config/model-routing.md` | 配置 | 模型路由单一真源(角色 → 模型) |
-| `opencode/opencode.json` | 配置 | OpenCode `agent.build` / `agent.review` 模型 + instructions 单点 |
+| `opencode/agents/{build,review}.md` | 配置 | OpenCode 原生 agent;不写用户主配置 |
 
 ## 脚本参数
 
 | 平台 | 脚本 | 参数 |
 | --- | --- | --- |
-| Windows / PowerShell | `install.ps1` / `uninstall.ps1` | `-Tool cursor|opencode|claude|all`(默认 `cursor`);`-Project <path>`(可选) |
-| macOS / Linux / bash | `install.sh` / `uninstall.sh` | `--tool cursor|opencode|claude|all`(默认 `cursor`);`--project <path>`(可选) |
+| Windows / PowerShell | `install.ps1` / `uninstall.ps1` | `-Tool cursor|opencode|claude|all`;Cursor/all 安装必须给 `-Project <path>` |
+| macOS / Linux / bash | `install.sh` / `uninstall.sh` | `--tool cursor|opencode|claude|all`;Cursor/all 安装必须给 `--project <path>` |
 
 脚本以自身所在目录为 REPO_ROOT,可从任意工作目录调用。
 
@@ -35,13 +35,20 @@
    - `skills/*` → `%USERPROFILE%\.cursor\skills\<skill>\SKILL.md`(覆盖式,自动建目录),Cursor 按 `description` 自动发现调用。
    - `rules/workflow-gate.mdc` → `<repo>\.cursor\rules\workflow-gate.mdc`,`alwaysApply: true`,该项目内**每轮强制**自动生效,纯文件、无需 GUI。
 
-2. 若不带 `-Project`,只装 5 个 skill,并打印脊柱写入提示:
+2. 不带 `-Project` 会在任何写入前失败,避免只装 skill 却遗漏强制脊柱。Cursor 没有文件式跨项目全局规则;对每个项目执行脚本即可全自动安装。
 
-   ```powershell
-   .\install.ps1 -Tool cursor
-   ```
+## 自动放置清单
 
-3. **唯一需要手动的一步(Cursor 平台限制)**:Cursor **没有**基于文件的"跨项目全局常驻规则"。要让脊柱对**所有** Cursor 项目生效,只能一次性在 **Settings → Rules** 里手动粘贴 `rules/workflow-gate.mdc` 的内容(User Rules)。逐项目用 `.cursor/rules/` 则完全自动、无需 GUI。这一点如实标注,不做假自动化。
+| 工具 | 仓库来源 | 自动目标 |
+| --- | --- | --- |
+| Cursor | `skills/*` | `%USERPROFILE%\.cursor\skills\<skill>\` / `~/.cursor/skills/<skill>/` |
+| Cursor(带 Project) | `rules/workflow-gate.mdc` | `<project>/.cursor/rules/workflow-gate.mdc` |
+| OpenCode | `skills/*` | `~/.config/opencode/skills/<skill>/` |
+| OpenCode | `rules/workflow-gate.mdc` | `~/.config/opencode/AGENTS.md` 标记块 |
+| OpenCode | `opencode/agents/*.md` | `~/.config/opencode/agents/*.md` |
+| Claude | `skills/*` + spine | `~/.claude/skills/<skill>/` + `~/.claude/CLAUDE.md` 标记块 |
+
+脚本自动完成全部复制和注入,无需 agent 或用户再手工移动文件。OpenCode 运行中的会话需在安装后重启。
 
 ## OpenCode 安装(逐步)
 
@@ -51,8 +58,9 @@
 
 - `skills/*` → `~/.config/opencode/skills/<skill>/SKILL.md`。
 - 脊柱正文(已剥离 `.mdc` frontmatter)幂等注入 `~/.config/opencode/AGENTS.md`(全局始终加载),用 `<!-- BEGIN agent-workflow-skills spine -->` / `<!-- END agent-workflow-skills spine -->` 标记块包裹。
-- `opencode/opencode.json` → `~/.config/opencode/opencode.json`,**仅当该文件不存在时**才拷贝;已存在则不覆盖,并提示你手动合并其中的 `agent` 块(避免覆盖你已有的 OpenCode 配置)。
-- 换模型:改 `opencode.json` 的 `agent.build.model` / `agent.review.model` 占位符(真实 id 用 `opencode models` 查)。模板只有 build/review:build 映射到配置的实现模型;真正复杂、需要深度推理的任务按路由策略显式选择 Sol;review 必须与实现/推理模型不同家族。
+- `opencode/agents/{build,review}.md` → `~/.config/opencode/agents/`,由 OpenCode 原生发现;build 遵循 Terra 默认 / Sol 深推理升级,review 使用不同家族 GLM。
+- 用户的 `opencode.json` 或 `opencode.jsonc` 仅做严格 UTF-8 + JSON/JSONC 语法预检,安装前后字节完全相同;不存在时也不会创建。若两者同时存在、配置损坏或同名 agent 不是本包所有,脚本在任何写入前失败并给出路径。
+- PowerShell 5.1 使用显式 UTF-8 无 BOM 读写和 UTF-8 console encoding;已有主配置的语法预检需要 Python 3,bash/Python 均强制 UTF-8。注入文件采用临时文件后替换,降低中断写入风险。
 
 ## 模型路由
 
@@ -72,7 +80,8 @@
 
 - **skills**:每次安装先删同名目标文件夹再拷贝,保证内容与仓库一致、不残留旧文件。
 - **AGENTS.md / CLAUDE.md 脊柱注入**:用标记块定位。若标记块已存在则**原地替换**,否则追加;文件不存在则创建。因此重复运行只会保留**一个**脊柱块,不会累积。文件里标记块以外的内容原样保留。
-- **opencode.json**:已存在则不动(提示手动合并 `agent` 块)。
+- **OpenCode agents**:仅覆盖带本包 ownership marker 的 `build.md` / `review.md`;遇到同名用户文件会失败,不会猜测。
+- **opencode.json / opencode.jsonc**:永不改写;支持注释和尾逗号的 JSONC,也不会创建竞争文件。
 
 ## 卸载 / 热插拔
 
@@ -80,18 +89,19 @@
 
 ```powershell
 .\uninstall.ps1 -Tool cursor -Project D:\path\to\your-repo
-.\uninstall.ps1 -Tool all
+.\uninstall.ps1 -Tool all -Project D:\path\to\your-repo
 ```
 
 ```bash
 ./uninstall.sh --tool opencode
-./uninstall.sh --tool all
+./uninstall.sh --tool all --project /path/to/your-repo
 ```
 
 - 删掉本包拷入的 skill 文件夹(只删本包自带的 5 个名字,不动目标目录里的其它 skill)。
 - 移除 `AGENTS.md` / `CLAUDE.md` 里的脊柱标记块,保留文件其余内容。
+- 只删除带 ownership marker 的 OpenCode `agents/build.md` / `agents/review.md`,不删同名用户文件。
 - `-Project` 给定时删掉 `<repo>\.cursor\rules\workflow-gate.mdc`。
-- `opencode.json` **不会**被删(可能已被你修改)。
+- `opencode.json` / `opencode.jsonc` **不会被修改或删除**。
 - 已不存在的项直接跳过,不报错。
 
 ## 验证已生效
@@ -99,3 +109,5 @@
 - Cursor 项目脊柱:`<repo>\.cursor\rules\workflow-gate.mdc` 存在且首部 `alwaysApply: true`;新开一轮,agent 应在开头 announce 本轮 A/B/C/D 路径。
 - 按需 skill:新开一轮发「按 `code-review` 走,分层审查这段 diff」,应复述 7 层审查 + no-false-negative 复验。
 - 模型路由:发「说明你读到的模型路由与并行/串行规则」,应复述 Terra 负责常规实现、Sol 仅处理复杂深度推理、GLM 审查且换家族、并行需真正独立。
+
+仓库回归测试使用临时中文路径作为 `HOME` / `USERPROFILE`,覆盖 `.json`、带注释/尾逗号 `.jsonc`、双文件歧义、损坏配置、UTF-8、重复安装/卸载及全部目标路径,不会访问真实用户目录。

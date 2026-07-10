@@ -14,7 +14,7 @@ description: Decide parallel vs serial subagent decomposition, apply role-based 
 
 ## Role-based model routing (single source = `config/model-routing.md`)
 
-- Routing is by ROLE, not hardcoded here. The single source of truth is `config/model-routing.md` (and, for OpenCode, `opencode.json` `agent.build.model` / `agent.review.model`); change models there.
+- Routing is by ROLE, not hardcoded here. `config/model-routing.md` is the source of truth; OpenCode mirrors the role policy in `opencode/agents/{build,review}.md` without editing the user's main config.
 - Implementation / refactor / debugging / normal architecture → Terra: `gpt-5.6-terra-xhigh`.
 - Genuinely complex or difficult design and diagnosis requiring deep reasoning → Sol: `gpt-5.6-sol-xhigh`. Escalate only for a non-obvious cross-system trade-off, an uncertain root cause, or a contract-level decision requiring multi-step reasoning.
 - Review / verification → GLM: `glm-5.2-max`, a DIFFERENT model family from both Terra and Sol. No same-family self-verification.

@@ -4,3 +4,5 @@
 # Windows
 Thumbs.db
 desktop.ini
+__pycache__/
+*.pyc

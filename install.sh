@@ -27,6 +27,39 @@ REPO_ROOT="$(cd "$(dirname "$0")" && pwd)"
 BEGIN_MARKER='<!-- BEGIN agent-workflow-skills spine -->'
 END_MARKER='<!-- END agent-workflow-skills spine -->'
 SUMMARY=()
+OPENCODE_CONFIG=""
+AGENT_MARKER='<!-- Managed by agent-workflow-skills. -->'
+
+resolve_python() {
+  if command -v python3 >/dev/null 2>&1; then printf '%s\n' python3
+  elif command -v python >/dev/null 2>&1; then printf '%s\n' python
+  else echo "Python 3 is required to validate an existing OpenCode JSON/JSONC config safely." >&2; return 1
+  fi
+}
+
+preflight_opencode() {
+  base="$HOME/.config/opencode"
+  json="$base/opencode.json"
+  jsonc="$base/opencode.jsonc"
+  if [ -f "$json" ] && [ -f "$jsonc" ]; then
+    echo "Both $json and $jsonc exist. OpenCode config is ambiguous; remove or rename one. Nothing was installed." >&2
+    return 1
+  fi
+  if [ -f "$jsonc" ]; then OPENCODE_CONFIG="$jsonc"
+  elif [ -f "$json" ]; then OPENCODE_CONFIG="$json"
+  fi
+  if [ -n "$OPENCODE_CONFIG" ]; then
+    python_cmd="$(resolve_python)"
+    PYTHONUTF8=1 PYTHONIOENCODING=utf-8 "$python_cmd" "$REPO_ROOT/tools/validate_jsonc.py" "$OPENCODE_CONFIG" ||
+      { echo "Invalid OpenCode config: $OPENCODE_CONFIG. Nothing was installed." >&2; return 1; }
+  fi
+  for agent in "$base/agents/build.md" "$base/agents/review.md"; do
+    if [ -f "$agent" ] && ! grep -Fq "$AGENT_MARKER" "$agent"; then
+      echo "OpenCode agent already exists and is not bundle-owned: $agent. Nothing was installed." >&2
+      return 1
+    fi
+  done
+}
 
 copy_skills() {
   dest="$1"
@@ -47,44 +80,34 @@ spine_body() {
   ' "$REPO_ROOT/rules/workflow-gate.mdc" | sed '/./,$!d'
 }
 
-remove_spine_block() {
-  file="$1"
-  [ -f "$file" ] || return 0
-  awk -v b="$BEGIN_MARKER" -v e="$END_MARKER" '
-    $0==b { skip=1 }
-    skip!=1 { print }
-    $0==e { skip=0 }
-  ' "$file" > "$file.tmp"
-  mv "$file.tmp" "$file"
-}
-
 set_spine_block() {
-  # Idempotent: strip any existing block, then append a fresh one.
   file="$1"
   mkdir -p "$(dirname "$file")"
-  remove_spine_block "$file"
+  tmp="$(mktemp "${file}.tmp.XXXXXX")"
+  if [ -f "$file" ]; then
+    awk -v b="$BEGIN_MARKER" -v e="$END_MARKER" '
+      $0==b { skip=1 }
+      skip!=1 { print }
+      $0==e { skip=0 }
+    ' "$file" > "$tmp"
+  fi
   {
-    if [ -s "$file" ]; then printf '\n'; fi
+    if [ -s "$tmp" ]; then printf '\n'; fi
     printf '%s\n' "$BEGIN_MARKER"
     spine_body
     printf '%s\n' "$END_MARKER"
-  } >> "$file"
+  } >> "$tmp"
+  mv -f "$tmp" "$file"
 }
 
 install_cursor() {
   skills_dir="$HOME/.cursor/skills"
   copy_skills "$skills_dir"
   SUMMARY+=("cursor: skills -> $skills_dir")
-  if [ -n "$PROJECT" ]; then
-    rules_dir="$PROJECT/.cursor/rules"
-    mkdir -p "$rules_dir"
-    cp -f "$REPO_ROOT/rules/workflow-gate.mdc" "$rules_dir/workflow-gate.mdc"
-    SUMMARY+=("cursor: forced always-on spine -> $rules_dir/workflow-gate.mdc (alwaysApply)")
-  else
-    echo "[note] Cursor's file-based forced always-on rule is PER-PROJECT. Re-run with --project <path> to write rules/workflow-gate.mdc into <project>/.cursor/rules/."
-    echo "[note] Cursor has NO file-based cross-project global always-on rule. Applying the spine to ALL projects needs a one-time Settings -> Rules GUI paste of rules/workflow-gate.mdc (single unavoidable manual step, a Cursor platform limit)."
-    SUMMARY+=("cursor: no --project given -> forced spine NOT written (see notes above)")
-  fi
+  rules_dir="$PROJECT/.cursor/rules"
+  mkdir -p "$rules_dir"
+  cp -f "$REPO_ROOT/rules/workflow-gate.mdc" "$rules_dir/workflow-gate.mdc"
+  SUMMARY+=("cursor: forced always-on spine -> $rules_dir/workflow-gate.mdc (alwaysApply)")
 }
 
 install_opencode() {
@@ -93,14 +116,12 @@ install_opencode() {
   SUMMARY+=("opencode: skills -> $base/skills")
   set_spine_block "$base/AGENTS.md"
   SUMMARY+=("opencode: spine injected -> $base/AGENTS.md (marker block)")
-  if [ -f "$base/opencode.json" ]; then
-    echo "[note] $base/opencode.json exists; NOT overwritten. Merge the 'agent' block manually from opencode/opencode.json."
-    SUMMARY+=("opencode: opencode.json exists -> left as-is (merge 'agent' block manually)")
-  else
-    mkdir -p "$base"
-    cp -f "$REPO_ROOT/opencode/opencode.json" "$base/opencode.json"
-    SUMMARY+=("opencode: opencode.json -> $base/opencode.json")
-  fi
+  mkdir -p "$base/agents"
+  cp -f "$REPO_ROOT/opencode/agents/build.md" "$base/agents/build.md"
+  cp -f "$REPO_ROOT/opencode/agents/review.md" "$base/agents/review.md"
+  SUMMARY+=("opencode: native agents -> $base/agents/{build,review}.md")
+  config_label="${OPENCODE_CONFIG:-none present; none created}"
+  SUMMARY+=("opencode: main config untouched -> $config_label")
 }
 
 install_claude() {
@@ -110,6 +131,12 @@ install_claude() {
   set_spine_block "$base/CLAUDE.md"
   SUMMARY+=("claude: spine injected -> $base/CLAUDE.md (marker block)")
 }
+
+if { [ "$TOOL" = cursor ] || [ "$TOOL" = all ]; } && [ -z "$PROJECT" ]; then
+  echo "--project is required for Cursor installation so the forced spine is installed automatically. Nothing was installed." >&2
+  exit 1
+fi
+if [ "$TOOL" = opencode ] || [ "$TOOL" = all ]; then preflight_opencode; fi
 
 case "$TOOL" in
   cursor)   install_cursor ;;
@@ -122,4 +149,5 @@ esac
 echo ""
 echo "=== agent-workflow-skills install summary (tool=$TOOL) ==="
 for line in "${SUMMARY[@]}"; do echo "  - $line"; done
+if [ "$TOOL" = opencode ] || [ "$TOOL" = all ]; then echo "Restart OpenCode to load the installed files."; fi
 echo "Done."

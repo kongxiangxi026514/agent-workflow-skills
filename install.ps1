@@ -7,12 +7,12 @@
   cursor | opencode | claude | all   (default: cursor)
 
 .PARAMETER Project
-  Optional project path. For Cursor it writes the forced always-on rule
+  Required for cursor/all. Writes the forced always-on rule
   <Project>\.cursor\rules\workflow-gate.mdc (per-project alwaysApply).
 
 .EXAMPLE
   .\install.ps1 -Tool cursor -Project D:\work\my-repo
-  .\install.ps1 -Tool all
+  .\install.ps1 -Tool all -Project D:\work\my-repo
 #>
 [CmdletBinding()]
 param(
@@ -25,12 +25,58 @@ $ErrorActionPreference = 'Stop'
 $RepoRoot = $PSScriptRoot
 $BeginMarker = '<!-- BEGIN agent-workflow-skills spine -->'
 $EndMarker = '<!-- END agent-workflow-skills spine -->'
+$AgentMarker = '<!-- Managed by agent-workflow-skills. -->'
 $summary = New-Object System.Collections.Generic.List[string]
+$Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+$Utf8Strict = New-Object System.Text.UTF8Encoding($false, $true)
+[Console]::OutputEncoding = $Utf8NoBom
+$OutputEncoding = $Utf8NoBom
 
 function Write-NoBom([string]$Path, [string]$Text) {
     $dir = Split-Path -Parent $Path
     if ($dir -and -not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
-    [System.IO.File]::WriteAllText($Path, $Text, (New-Object System.Text.UTF8Encoding($false)))
+    $temp = "$Path.$([guid]::NewGuid().ToString('N')).tmp"
+    try {
+        [System.IO.File]::WriteAllText($temp, $Text, $Utf8NoBom)
+        Move-Item -Force -LiteralPath $temp -Destination $Path
+    }
+    finally {
+        if (Test-Path -LiteralPath $temp) { Remove-Item -Force -LiteralPath $temp }
+    }
+}
+
+function Read-Utf8([string]$Path) {
+    return [System.IO.File]::ReadAllText($Path, $Utf8Strict)
+}
+
+function Resolve-Python {
+    foreach ($name in @('python3', 'python')) {
+        $command = Get-Command $name -ErrorAction SilentlyContinue
+        if ($command) { return $command.Source }
+    }
+    throw 'Python 3 is required to validate an existing OpenCode JSON/JSONC config safely.'
+}
+
+function Test-OpenCodeConfig {
+    $base = Join-Path $env:USERPROFILE '.config\opencode'
+    $json = Join-Path $base 'opencode.json'
+    $jsonc = Join-Path $base 'opencode.jsonc'
+    if ((Test-Path -LiteralPath $json) -and (Test-Path -LiteralPath $jsonc)) {
+        throw "Both $json and $jsonc exist. OpenCode config is ambiguous; remove or rename one. Nothing was installed."
+    }
+    $config = if (Test-Path -LiteralPath $jsonc) { $jsonc } elseif (Test-Path -LiteralPath $json) { $json } else { $null }
+    if ($config) {
+        $python = Resolve-Python
+        & $python (Join-Path $RepoRoot 'tools\validate_jsonc.py') $config
+        if ($LASTEXITCODE -ne 0) { throw "Invalid OpenCode config: $config. Nothing was installed." }
+    }
+    foreach ($name in @('build.md', 'review.md')) {
+        $agent = Join-Path $base "agents\$name"
+        if ((Test-Path -LiteralPath $agent) -and -not (Read-Utf8 $agent).Contains($AgentMarker)) {
+            throw "OpenCode agent already exists and is not bundle-owned: $agent. Nothing was installed."
+        }
+    }
+    return $config
 }
 
 function Copy-Skills([string]$DestSkillsDir) {
@@ -44,7 +90,7 @@ function Copy-Skills([string]$DestSkillsDir) {
 
 function Get-SpineBody {
     # Read rules/workflow-gate.mdc and strip the leading --- ... --- frontmatter.
-    $raw = Get-Content -Raw -LiteralPath (Join-Path $RepoRoot 'rules\workflow-gate.mdc')
+    $raw = Read-Utf8 (Join-Path $RepoRoot 'rules\workflow-gate.mdc')
     $body = [regex]::Replace($raw, '^---\r?\n.*?\r?\n---\r?\n', '', [System.Text.RegularExpressions.RegexOptions]::Singleline)
     return $body.Trim()
 }
@@ -54,7 +100,7 @@ function Set-SpineBlock([string]$File) {
     $body = Get-SpineBody
     $block = "$BeginMarker`n$body`n$EndMarker"
     if (Test-Path $File) {
-        $content = Get-Content -Raw -LiteralPath $File
+        $content = Read-Utf8 $File
         if ($null -eq $content) { $content = '' }
         $bi = $content.IndexOf($BeginMarker)
         $ei = $content.IndexOf($EndMarker)
@@ -77,18 +123,11 @@ function Install-Cursor {
     $skillsDir = Join-Path $env:USERPROFILE '.cursor\skills'
     Copy-Skills $skillsDir
     $summary.Add("cursor: skills -> $skillsDir")
-    if ($Project) {
-        $rulesDir = Join-Path $Project '.cursor\rules'
-        if (-not (Test-Path $rulesDir)) { New-Item -ItemType Directory -Path $rulesDir -Force | Out-Null }
-        $dest = Join-Path $rulesDir 'workflow-gate.mdc'
-        Copy-Item -Force -LiteralPath (Join-Path $RepoRoot 'rules\workflow-gate.mdc') -Destination $dest
-        $summary.Add("cursor: forced always-on spine -> $dest (alwaysApply)")
-    }
-    else {
-        Write-Host "[note] Cursor's file-based forced always-on rule is PER-PROJECT. Re-run with -Project <path> to write rules/workflow-gate.mdc into <project>\.cursor\rules\." -ForegroundColor Yellow
-        Write-Host "[note] Cursor has NO file-based cross-project global always-on rule. To apply the spine to ALL projects you must paste rules/workflow-gate.mdc once via Settings -> Rules (GUI). This is the single unavoidable manual step (a Cursor platform limit)." -ForegroundColor Yellow
-        $summary.Add("cursor: no -Project given -> forced spine NOT written (see notes above)")
-    }
+    $rulesDir = Join-Path $Project '.cursor\rules'
+    if (-not (Test-Path $rulesDir)) { New-Item -ItemType Directory -Path $rulesDir -Force | Out-Null }
+    $dest = Join-Path $rulesDir 'workflow-gate.mdc'
+    Copy-Item -Force -LiteralPath (Join-Path $RepoRoot 'rules\workflow-gate.mdc') -Destination $dest
+    $summary.Add("cursor: forced always-on spine -> $dest (alwaysApply)")
 }
 
 function Install-OpenCode {
@@ -99,15 +138,14 @@ function Install-OpenCode {
     $agents = Join-Path $base 'AGENTS.md'
     Set-SpineBlock $agents
     $summary.Add("opencode: spine injected -> $agents (marker block)")
-    $cfgDest = Join-Path $base 'opencode.json'
-    if (Test-Path $cfgDest) {
-        Write-Host "[note] $cfgDest already exists; NOT overwritten. Merge the 'agent' block manually from opencode/opencode.json." -ForegroundColor Yellow
-        $summary.Add("opencode: opencode.json exists -> left as-is (merge 'agent' block manually)")
+    $agentDir = Join-Path $base 'agents'
+    if (-not (Test-Path $agentDir)) { New-Item -ItemType Directory -Path $agentDir -Force | Out-Null }
+    foreach ($name in @('build.md', 'review.md')) {
+        Copy-Item -Force -LiteralPath (Join-Path $RepoRoot "opencode\agents\$name") -Destination (Join-Path $agentDir $name)
     }
-    else {
-        Copy-Item -Force -LiteralPath (Join-Path $RepoRoot 'opencode\opencode.json') -Destination $cfgDest
-        $summary.Add("opencode: opencode.json -> $cfgDest")
-    }
+    $summary.Add("opencode: native agents -> $agentDir\{build,review}.md")
+    $configLabel = if ($script:OpenCodeConfig) { $script:OpenCodeConfig } else { 'none present; none created' }
+    $summary.Add("opencode: main config untouched -> $configLabel")
 }
 
 function Install-Claude {
@@ -120,6 +158,13 @@ function Install-Claude {
     $summary.Add("claude: spine injected -> $claudeMd (marker block)")
 }
 
+if (($Tool -eq 'cursor' -or $Tool -eq 'all') -and -not $Project) {
+    throw '-Project is required for Cursor installation so the forced spine is installed automatically. Nothing was installed.'
+}
+if ($Tool -eq 'opencode' -or $Tool -eq 'all') {
+    $script:OpenCodeConfig = Test-OpenCodeConfig
+}
+
 switch ($Tool) {
     'cursor' { Install-Cursor }
     'opencode' { Install-OpenCode }
@@ -130,4 +175,5 @@ switch ($Tool) {
 Write-Host ""
 Write-Host "=== agent-workflow-skills install summary (tool=$Tool) ===" -ForegroundColor Cyan
 foreach ($line in $summary) { Write-Host "  - $line" }
+if ($Tool -eq 'opencode' -or $Tool -eq 'all') { Write-Host "Restart OpenCode to load the installed files." }
 Write-Host "Done."

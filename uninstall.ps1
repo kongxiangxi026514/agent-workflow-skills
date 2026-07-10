@@ -11,7 +11,7 @@
 
 .EXAMPLE
   .\uninstall.ps1 -Tool cursor -Project D:\work\my-repo
-  .\uninstall.ps1 -Tool all
+  .\uninstall.ps1 -Tool all -Project D:\work\my-repo
 #>
 [CmdletBinding()]
 param(
@@ -24,10 +24,26 @@ $ErrorActionPreference = 'Stop'
 $RepoRoot = $PSScriptRoot
 $BeginMarker = '<!-- BEGIN agent-workflow-skills spine -->'
 $EndMarker = '<!-- END agent-workflow-skills spine -->'
+$AgentMarker = '<!-- Managed by agent-workflow-skills. -->'
 $summary = New-Object System.Collections.Generic.List[string]
+$Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+$Utf8Strict = New-Object System.Text.UTF8Encoding($false, $true)
+[Console]::OutputEncoding = $Utf8NoBom
+$OutputEncoding = $Utf8NoBom
 
 function Write-NoBom([string]$Path, [string]$Text) {
-    [System.IO.File]::WriteAllText($Path, $Text, (New-Object System.Text.UTF8Encoding($false)))
+    $temp = "$Path.$([guid]::NewGuid().ToString('N')).tmp"
+    try {
+        [System.IO.File]::WriteAllText($temp, $Text, $Utf8NoBom)
+        Move-Item -Force -LiteralPath $temp -Destination $Path
+    }
+    finally {
+        if (Test-Path -LiteralPath $temp) { Remove-Item -Force -LiteralPath $temp }
+    }
+}
+
+function Read-Utf8([string]$Path) {
+    return [System.IO.File]::ReadAllText($Path, $Utf8Strict)
 }
 
 function Remove-Skills([string]$DestSkillsDir) {
@@ -42,7 +58,7 @@ function Remove-Skills([string]$DestSkillsDir) {
 function Remove-SpineBlock([string]$File) {
     # Strip the spine marker block, leaving the rest of the file intact.
     if (-not (Test-Path $File)) { return }
-    $content = Get-Content -Raw -LiteralPath $File
+    $content = Read-Utf8 $File
     if ($null -eq $content) { return }
     $bi = $content.IndexOf($BeginMarker)
     $ei = $content.IndexOf($EndMarker)
@@ -60,8 +76,9 @@ function Uninstall-Cursor {
     $summary.Add("cursor: removed bundle skills from $skillsDir")
     if ($Project) {
         $dest = Join-Path $Project '.cursor\rules\workflow-gate.mdc'
-        if (Test-Path $dest) { Remove-Item -Force -LiteralPath $dest }
-        $summary.Add("cursor: removed forced spine rule $dest")
+        $source = Join-Path $RepoRoot 'rules\workflow-gate.mdc'
+        if ((Test-Path $dest) -and ([Convert]::ToBase64String([IO.File]::ReadAllBytes($dest)) -eq [Convert]::ToBase64String([IO.File]::ReadAllBytes($source)))) { Remove-Item -Force -LiteralPath $dest }
+        $summary.Add("cursor: processed spine rule $dest (removed only when bundle-owned)")
     }
 }
 
@@ -71,7 +88,14 @@ function Uninstall-OpenCode {
     $summary.Add("opencode: removed bundle skills from $base\skills")
     $agents = Join-Path $base 'AGENTS.md'
     Remove-SpineBlock $agents
-    $summary.Add("opencode: removed spine marker block from $agents (opencode.json left intact)")
+    $summary.Add("opencode: removed spine marker block from $agents")
+    foreach ($name in @('build.md', 'review.md')) {
+        $path = Join-Path $base "agents\$name"
+        if ((Test-Path -LiteralPath $path) -and (Read-Utf8 $path).Contains($AgentMarker)) {
+            Remove-Item -Force -LiteralPath $path
+        }
+    }
+    $summary.Add("opencode: processed native agents in $base\agents (removed only when bundle-owned; main config untouched)")
 }
 
 function Uninstall-Claude {

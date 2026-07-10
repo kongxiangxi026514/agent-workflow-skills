@@ -20,7 +20,7 @@ This file is the **only** place to edit for defining "which role uses which mode
 ## Dynamically switching models (edit here = single point)
 
 - **Cursor**: edit the "Role → model" table in this file, then sync the same slugs and roles in `rules/workflow-gate.mdc` and `skills/parallel-dispatch/SKILL.md`. Dispatch Terra for routine implementation work, Sol for qualifying complex design or diagnosis, and GLM for review or verification.
-- **OpenCode**: this template has only `agent.build.model` and `agent.review.model`. Keep their placeholder ids until real ids are selected with `opencode models`; map `build` to the configured implementation model, select Sol for qualifying deep-reasoning work through this routing policy, and map `review` to a different-family reviewer.
+- **OpenCode**: `opencode/agents/build.md` and `review.md` express the same roles without changing the user's main config. Build defaults to Terra and escalates qualifying deep reasoning to Sol; review remains different-family GLM.
 
 ## Cost strategy
 

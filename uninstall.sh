@@ -26,6 +26,7 @@ done
 REPO_ROOT="$(cd "$(dirname "$0")" && pwd)"
 BEGIN_MARKER='<!-- BEGIN agent-workflow-skills spine -->'
 END_MARKER='<!-- END agent-workflow-skills spine -->'
+AGENT_MARKER='<!-- Managed by agent-workflow-skills. -->'
 SUMMARY=()
 
 remove_skills() {
@@ -41,12 +42,13 @@ remove_skills() {
 remove_spine_block() {
   file="$1"
   [ -f "$file" ] || return 0
+  tmp="$(mktemp "${file}.tmp.XXXXXX")"
   awk -v b="$BEGIN_MARKER" -v e="$END_MARKER" '
     $0==b { skip=1 }
     skip!=1 { print }
     $0==e { skip=0 }
-  ' "$file" > "$file.tmp"
-  mv "$file.tmp" "$file"
+  ' "$file" > "$tmp"
+  mv -f "$tmp" "$file"
 }
 
 uninstall_cursor() {
@@ -55,8 +57,8 @@ uninstall_cursor() {
   SUMMARY+=("cursor: removed bundle skills from $skills_dir")
   if [ -n "$PROJECT" ]; then
     dest="$PROJECT/.cursor/rules/workflow-gate.mdc"
-    rm -f "$dest"
-    SUMMARY+=("cursor: removed forced spine rule $dest")
+    if [ -f "$dest" ] && cmp -s "$REPO_ROOT/rules/workflow-gate.mdc" "$dest"; then rm -f "$dest"; fi
+    SUMMARY+=("cursor: processed spine rule $dest (removed only when bundle-owned)")
   fi
 }
 
@@ -65,7 +67,11 @@ uninstall_opencode() {
   remove_skills "$base/skills"
   SUMMARY+=("opencode: removed bundle skills from $base/skills")
   remove_spine_block "$base/AGENTS.md"
-  SUMMARY+=("opencode: removed spine marker block from $base/AGENTS.md (opencode.json left intact)")
+  SUMMARY+=("opencode: removed spine marker block from $base/AGENTS.md")
+  for agent in "$base/agents/build.md" "$base/agents/review.md"; do
+    if [ -f "$agent" ] && grep -Fq "$AGENT_MARKER" "$agent"; then rm -f "$agent"; fi
+  done
+  SUMMARY+=("opencode: processed native agents in $base/agents (removed only when bundle-owned; main config untouched)")
 }
 
 uninstall_claude() {
