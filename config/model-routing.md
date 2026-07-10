@@ -6,19 +6,22 @@ This file is the **only** place to edit for defining "which role uses which mode
 
 | Role | Responsibility | Cursor slug |
 | --- | --- | --- |
-| implementer | Implementation / refactor / debug | `claude-opus-4-8-thinking-xhigh` (escalate hard tasks → `claude-opus-4-8-thinking-max`) |
-| reviewer | Review / verification | `gpt-5.5-extra-high` |
+| implementer | Implementation, refactor, debugging, and normal architecture work | `gpt-5.6-terra-xhigh` |
+| reasoner | Genuinely complex or difficult design and diagnosis that require deep reasoning | `gpt-5.6-sol-xhigh` |
+| reviewer | Review and verification | `glm-5.2-max` |
 
 ## Hard rules
 
-- **The reviewer MUST be a different model family from the implementer**, to avoid the blind spot of same-model self-verification (cross-model verification).
-- Non-trivial changes: implementer implements → reviewer does a cross-model review → main agent independently re-verifies; contract-level (D-risk) changes MUST complete all three steps and never accept the implementer's self-approval as the final conclusion.
+- Use Terra by default for implementation, refactoring, debugging, and normal architecture work.
+- Escalate to Sol only when a design or diagnosis remains genuinely difficult after ordinary analysis: a non-obvious cross-system trade-off, an uncertain root cause, or a contract-level decision requiring deep multi-step reasoning.
+- **The reviewer MUST be a different model family from both the implementer and reasoner**, to avoid same-family self-verification blind spots.
+- Non-trivial changes: implementer or reasoner completes the work → reviewer performs a cross-model review → main agent independently re-verifies. Contract-level (D-risk) changes MUST complete all three steps and never accept self-approval as the final conclusion.
 
 ## Dynamically switching models (edit here = single point)
 
-- **Cursor**: edit the "Role → model" table in this file, and sync the slugs in the `## Model routing (dynamic single point)` section of `rules/workflow-gate.mdc`. When dispatching subagents, pass the implementer model for build tasks and the reviewer model for review tasks.
-- **OpenCode**: edit `agent.build.model` / `agent.review.model` in `opencode/opencode.json`. Look up real available ids with `opencode models` (e.g. build with GLM 5.2, review with Kimi K2.6 — different families).
+- **Cursor**: edit the "Role → model" table in this file, then sync the same slugs and roles in `rules/workflow-gate.mdc` and `skills/parallel-dispatch/SKILL.md`. Dispatch Terra for routine implementation work, Sol for qualifying complex design or diagnosis, and GLM for review or verification.
+- **OpenCode**: this template has only `agent.build.model` and `agent.review.model`. Keep their placeholder ids until real ids are selected with `opencode models`; map `build` to the configured implementation model, select Sol for qualifying deep-reasoning work through this routing policy, and map `review` to a different-family reviewer.
 
 ## Cost strategy
 
-Quality first, cost secondary but **actively managed**: use a cheap, fast, good-enough model for mechanical work (formatting / bulk renames / simple migrations), and reserve strong models for high-value steps like design / review / verification; control the number of subagents and the parallel fan-out, and avoid pointless duplicate research and re-runs.
+Quality first, cost secondary but **actively managed**: follow the explicit role mapping above, avoid unnecessary Sol escalation, control the number of subagents and parallel fan-out, and avoid duplicate research or re-runs.

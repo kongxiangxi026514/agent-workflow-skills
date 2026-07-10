@@ -63,9 +63,9 @@ OpenCode(全局 AGENTS.md 自动注入脊柱 + 全局 skills):
 ## 模型路由(动态单点)
 
 - **单一真源** = `config/model-routing.md`(角色 → 模型)。OpenCode 另有 `opencode/opencode.json` 的 `agent.build.model` / `agent.review.model`。
-- 当前分配(Cursor slug):implementer(实现/重构/调试)= `claude-opus-4-8-thinking-xhigh`(难任务 → `claude-opus-4-8-thinking-max`);reviewer(审查/验证)= `gpt-5.5-extra-high`。
-- **硬规则**:reviewer 必须与 implementer 属于**不同模型家族**,规避同模型自我验证盲区。
-- **换模型 = 只改单点**:Cursor 改 `config/model-routing.md`(并同步 `rules/workflow-gate.mdc` 的 Model routing 段);OpenCode 改 `opencode/opencode.json` 的两个 `REPLACE_WITH_*_MODEL_ID`(真实 id 用 `opencode models` 查,例:build 用 GLM 5.2 / review 用 Kimi K2.6 —— 不同家族)。
+- 当前分配(Cursor slug):Terra `gpt-5.6-terra-xhigh` 负责实现/重构/调试与常规架构;Sol `gpt-5.6-sol-xhigh` 仅负责真正复杂、困难、需要深度推理的设计或诊断;GLM `glm-5.2-max` 负责审查/验证。
+- **硬规则**:GLM reviewer 必须与 Terra implementer、Sol reasoner 都属于**不同模型家族**,规避同家族自我验证盲区。
+- **换模型 = 改单一真源并同步镜像**:Cursor 改 `config/model-routing.md`,再同步 `rules/workflow-gate.mdc` 的 Model routing 段和 `skills/parallel-dispatch/SKILL.md`;OpenCode 模板仅有 build/review 占位符,build 映射到配置的实现模型,真正需要深度推理时按本路由策略显式选择 Sol,真实 id 用 `opencode models` 查。
 
 ## 强制脊柱说明(诚实标注平台限制)
 
@@ -93,13 +93,13 @@ OpenCode(全局 AGENTS.md 自动注入脊柱 + 全局 skills):
 
 - **Cursor 项目脊柱**:确认 `<repo>\.cursor\rules\workflow-gate.mdc` 存在且首部有 `alwaysApply: true`;新开一轮,agent 应在开头 announce 本轮 A/B/C/D 路径。
 - **按需 skill**:新开一轮发「按 code-review 走,分层审查这段 diff」,应能复述 7 层审查 + no-false-negative 复验。
-- **模型路由**:发「说明你读到的 build/review 模型路由与并行/串行规则」,应复述 implementer 用强模型 / reviewer 换家族 / 并行需真正独立。
+- **模型路由**:发「说明你读到的模型路由与并行/串行规则」,应复述 Terra 负责常规实现、Sol 仅处理复杂深度推理、GLM 审查且换家族、并行需真正独立。
 
 ## 设计理念
 
 - **hybrid 结构**:1 个强制常驻脊柱 + 5 个按需 skill,职责清晰、可单独增删。
-- **质量优先、成本次要但主动管理**:顶级模型留给设计 / 审查 / 验证,机械活用够用的便宜快模型;控制子代理数量与并行扇出。
-- **角色化模型路由**:implementer 与 reviewer 用**不同模型家族**,规避同模型自我验证盲区。
+- **质量优先、成本次要但主动管理**:默认 Terra,仅在满足复杂深度推理条件时升级 Sol,审查/验证固定 GLM;控制子代理数量与并行扇出。
+- **角色化模型路由**:Terra / Sol 与 GLM reviewer 用**不同模型家族**,规避同家族自我验证盲区。
 - **分层触发,不做仪式**:强力模式按需叠加,不是每轮都跑 —— `first-principles`(难/新/模糊设计,通常 path C)、`code-review` 的 adversarial mode(安全/性能/并发敏感或高风险审查,叠加在 7 层之上)、脊柱的 metacognition checkpoint(仅关键节点:派发并行前 / path C·D 设计决策 / 声称完成前);trivial path-A 轮次一律跳过,避免噪声。
 
 ## 更多

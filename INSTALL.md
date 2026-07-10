@@ -52,7 +52,12 @@
 - `skills/*` → `~/.config/opencode/skills/<skill>/SKILL.md`。
 - 脊柱正文(已剥离 `.mdc` frontmatter)幂等注入 `~/.config/opencode/AGENTS.md`(全局始终加载),用 `<!-- BEGIN agent-workflow-skills spine -->` / `<!-- END agent-workflow-skills spine -->` 标记块包裹。
 - `opencode/opencode.json` → `~/.config/opencode/opencode.json`,**仅当该文件不存在时**才拷贝;已存在则不覆盖,并提示你手动合并其中的 `agent` 块(避免覆盖你已有的 OpenCode 配置)。
-- 换模型:改 `opencode.json` 的 `agent.build.model` / `agent.review.model`(把 `REPLACE_WITH_*_MODEL_ID` 换成 `opencode models` 查到的真实 id;build 与 review 必须不同家族)。
+- 换模型:改 `opencode.json` 的 `agent.build.model` / `agent.review.model` 占位符(真实 id 用 `opencode models` 查)。模板只有 build/review:build 映射到配置的实现模型;真正复杂、需要深度推理的任务按路由策略显式选择 Sol;review 必须与实现/推理模型不同家族。
+
+## 模型路由
+
+- Cursor:Terra `gpt-5.6-terra-xhigh` 负责实现/重构/调试与常规架构;Sol `gpt-5.6-sol-xhigh` 仅处理真正复杂、困难、需要深度推理的设计或诊断;GLM `glm-5.2-max` 负责审查/验证。
+- GLM reviewer 必须与 Terra implementer、Sol reasoner 都属于不同模型家族。具体升级条件和单一真源见 `config/model-routing.md`;修改后同步 `rules/workflow-gate.mdc` 与 `skills/parallel-dispatch/SKILL.md`。
 
 ## Claude 安装(逐步)
 
@@ -93,4 +98,4 @@
 
 - Cursor 项目脊柱:`<repo>\.cursor\rules\workflow-gate.mdc` 存在且首部 `alwaysApply: true`;新开一轮,agent 应在开头 announce 本轮 A/B/C/D 路径。
 - 按需 skill:新开一轮发「按 `code-review` 走,分层审查这段 diff」,应复述 7 层审查 + no-false-negative 复验。
-- 模型路由:发「说明你读到的 build/review 模型路由与并行/串行规则」,应复述 implementer 用强模型 / reviewer 换家族 / 并行需真正独立。
+- 模型路由:发「说明你读到的模型路由与并行/串行规则」,应复述 Terra 负责常规实现、Sol 仅处理复杂深度推理、GLM 审查且换家族、并行需真正独立。

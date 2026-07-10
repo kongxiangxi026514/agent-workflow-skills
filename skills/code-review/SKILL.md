@@ -1,6 +1,6 @@
 ---
 name: code-review
-description: Layered code review + no-false-negative re-verification + slimming/refactor discipline. Use when reviewing code changes, a diff, a PR, or a completed batch, or before merging. Reviewer should be a different model family than the implementer (cross-model verification).
+description: Layered code review + no-false-negative re-verification + slimming/refactor discipline. Use when reviewing code changes, a diff, a PR, or a completed batch, or before merging. Reviewer must be a different model family from implementation and deep-reasoning agents (cross-model verification).
 ---
 
 # Layered Code Review

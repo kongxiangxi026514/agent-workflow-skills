@@ -15,10 +15,11 @@ description: Decide parallel vs serial subagent decomposition, apply role-based 
 ## Role-based model routing (single source = `config/model-routing.md`)
 
 - Routing is by ROLE, not hardcoded here. The single source of truth is `config/model-routing.md` (and, for OpenCode, `opencode.json` `agent.build.model` / `agent.review.model`); change models there.
-- Implement / refactor / debug → the **implementer** model (current: `claude-opus-4-8-thinking-xhigh`, escalate hard tasks to `claude-opus-4-8-thinking-max`; OpenCode: `agent.build.model`).
-- Review / verification → the **reviewer** model, a DIFFERENT model family (current: `gpt-5.5-extra-high`; OpenCode: `agent.review.model`). No same-model self-verification.
-- When dispatching subagents: pass the implementer model for build tasks and the reviewer model for review tasks.
-- Quality first, cost is secondary — but actively manage cost/time: pick the cheapest model that meets the quality bar for mechanical work, reserve top models for design/review/verification.
+- Implementation / refactor / debugging / normal architecture → Terra: `gpt-5.6-terra-xhigh`.
+- Genuinely complex or difficult design and diagnosis requiring deep reasoning → Sol: `gpt-5.6-sol-xhigh`. Escalate only for a non-obvious cross-system trade-off, an uncertain root cause, or a contract-level decision requiring multi-step reasoning.
+- Review / verification → GLM: `glm-5.2-max`, a DIFFERENT model family from both Terra and Sol. No same-family self-verification.
+- When dispatching subagents: pass Terra for routine build tasks, Sol for qualifying deep-reasoning work, and GLM for review or verification. OpenCode exposes only build/review agents, so use its configured build model and select Sol through this routing policy when needed.
+- Quality first, cost is secondary: avoid unnecessary Sol escalation, keep the fan-out bounded, and do not duplicate research or re-runs.
 
 ## Context budget + circuit breaker
 
