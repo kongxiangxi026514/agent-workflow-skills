@@ -1,0 +1,6 @@
+{
+  // First install fills build/review from CLI; null reason reuses build.
+  "build": null,
+  "reason": null,
+  "review": null
+}

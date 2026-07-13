@@ -19,9 +19,10 @@ param(
     [ValidateSet('cursor', 'opencode', 'claude', 'all')]
     [string]$Tool = 'cursor',
     [string]$Project,
-    [string]$OpenCodeBuildModel,
-    [string]$OpenCodeReasonModel,
-    [string]$OpenCodeReviewModel
+    [string]$OpenCodeConfigDir,
+    [Alias('OpenCodeBuildModel')][string]$BuildModel,
+    [Alias('OpenCodeReasonModel')][string]$ReasonModel,
+    [Alias('OpenCodeReviewModel')][string]$ReviewModel
 )
 
 $ErrorActionPreference = 'Stop'
@@ -29,6 +30,11 @@ $RepoRoot = $PSScriptRoot
 $BeginMarker = '<!-- BEGIN agent-workflow-skills spine -->'
 $EndMarker = '<!-- END agent-workflow-skills spine -->'
 $AgentMarker = '<!-- Managed by agent-workflow-skills. -->'
+$SkillMarker = '.agent-workflow-skills-owned'
+$OpenCodeBase = if ($OpenCodeConfigDir) { $OpenCodeConfigDir } else { Join-Path $env:USERPROFILE '.config\opencode' }
+if (-not $BuildModel) { $BuildModel = $env:AGENT_WORKFLOW_OPENCODE_BUILD_MODEL }
+if (-not $ReasonModel) { $ReasonModel = $env:AGENT_WORKFLOW_OPENCODE_REASON_MODEL }
+if (-not $ReviewModel) { $ReviewModel = $env:AGENT_WORKFLOW_OPENCODE_REVIEW_MODEL }
 $summary = New-Object System.Collections.Generic.List[string]
 $Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 $Utf8Strict = New-Object System.Text.UTF8Encoding($false, $true)
@@ -60,27 +66,21 @@ function Resolve-Python {
             if ($LASTEXITCODE -eq 0) { return $command.Source }
         }
     }
-    throw 'A runnable Python 3 interpreter is required to validate an existing OpenCode JSON/JSONC config safely.'
+    throw 'A runnable Python 3 interpreter is required to validate and stage model bindings.'
 }
 
-function Resolve-OpenCodeModel([string]$Role, [string]$Value, [string]$EnvName) {
-    if ([string]::IsNullOrEmpty($Value)) { $Value = [Environment]::GetEnvironmentVariable($EnvName) }
-    $reserved = @('provider', 'model', 'placeholder', 'example', 'change-me', 'your-provider', 'your-model')
-    if ([string]::IsNullOrWhiteSpace($Value) -or $Value -match '[\r\n\p{Cc}]' -or
-        $Value -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]*(/[A-Za-z0-9][A-Za-z0-9._-]*)+$' -or
-        (@($Value -split '/') | Where-Object { $reserved -contains $_.ToLowerInvariant() }).Count -gt 0) {
-        throw "OpenCode $Role model is required as a safe provider/model ID. Run 'opencode models' and pass an exact available ID with the matching -OpenCode${Role}Model flag or $EnvName."
+function New-InstallStage([string]$Binding) {
+    $stage = Join-Path ([IO.Path]::GetTempPath()) "agent-workflow-$([guid]::NewGuid().ToString('N'))"
+    $python = Resolve-Python
+    $build = if ($BuildModel) { $BuildModel } else { '-' }
+    $reason = if ($ReasonModel) { $ReasonModel } else { '-' }
+    $review = if ($ReviewModel) { $ReviewModel } else { '-' }
+    & $python (Join-Path $RepoRoot 'tools\prepare_install.py') $stage $Binding $build $reason $review | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        if (Test-Path $stage) { Remove-Item -Recurse -Force $stage }
+        throw "Model binding validation failed. Nothing was installed."
     }
-    return $Value
-}
-
-function Resolve-OpenCodeModels {
-    $script:OpenCodeBuildModel = Resolve-OpenCodeModel 'Build' $OpenCodeBuildModel 'AGENT_WORKFLOW_OPENCODE_BUILD_MODEL'
-    $script:OpenCodeReasonModel = Resolve-OpenCodeModel 'Reason' $OpenCodeReasonModel 'AGENT_WORKFLOW_OPENCODE_REASON_MODEL'
-    $script:OpenCodeReviewModel = Resolve-OpenCodeModel 'Review' $OpenCodeReviewModel 'AGENT_WORKFLOW_OPENCODE_REVIEW_MODEL'
-    if ($script:OpenCodeReviewModel -eq $script:OpenCodeBuildModel -or $script:OpenCodeReviewModel -eq $script:OpenCodeReasonModel) {
-        throw "OpenCode review model must differ from build and reason models. Select exact IDs from 'opencode models' before installation."
-    }
+    return $stage
 }
 
 function Test-SpineMarkerIntegrity([string]$File) {
@@ -97,34 +97,44 @@ function Test-SpineMarkerIntegrity([string]$File) {
 }
 
 function Test-OpenCodeConfig {
-    $base = Join-Path $env:USERPROFILE '.config\opencode'
-    $json = Join-Path $base 'opencode.json'
-    $jsonc = Join-Path $base 'opencode.jsonc'
-    if ((Test-Path -LiteralPath $json) -and (Test-Path -LiteralPath $jsonc)) {
-        throw "Both $json and $jsonc exist. OpenCode config is ambiguous; remove or rename one. Nothing was installed."
-    }
-    $config = if (Test-Path -LiteralPath $jsonc) { $jsonc } elseif (Test-Path -LiteralPath $json) { $json } else { $null }
-    if ($config) {
-        $python = Resolve-Python
-        & $python (Join-Path $RepoRoot 'tools\validate_jsonc.py') $config
-        if ($LASTEXITCODE -ne 0) { throw "Invalid OpenCode config: $config. Nothing was installed." }
-    }
+    $present = @('opencode.json', 'opencode.jsonc') | Where-Object { Test-Path -LiteralPath (Join-Path $OpenCodeBase $_) }
+    $config = if ($present.Count) { ($present | ForEach-Object { Join-Path $OpenCodeBase $_ }) -join ', ' } else { $null }
+    $state = Join-Path $OpenCodeBase 'agent-workflow-skills\install-state.json'
+    $binding = Join-Path $OpenCodeBase 'agent-workflow-skills\model-routing.jsonc'
+    if ((Test-Path $binding) -and -not (Test-Path $state)) { throw "Model binding exists without bundle ownership: $binding. Nothing was installed." }
     foreach ($name in @('build.md', 'reason.md', 'review.md')) {
-        $agent = Join-Path $base "agents\$name"
+        $agent = Join-Path $OpenCodeBase "agents\$name"
         if ((Test-Path -LiteralPath $agent) -and -not (Read-Utf8 $agent).Contains($AgentMarker)) {
             throw "OpenCode agent already exists and is not bundle-owned: $agent. Nothing was installed."
         }
     }
+    Test-SkillOwnership (Join-Path $OpenCodeBase 'skills')
     return $config
 }
 
-function Copy-Skills([string]$DestSkillsDir) {
-    if (-not (Test-Path $DestSkillsDir)) { New-Item -ItemType Directory -Path $DestSkillsDir -Force | Out-Null }
+function Test-SkillOwnership([string]$DestSkillsDir) {
     Get-ChildItem -Directory -LiteralPath (Join-Path $RepoRoot 'skills') | ForEach-Object {
+        $dest = Join-Path $DestSkillsDir $_.Name
+        if ((Test-Path $dest) -and -not (Test-Path (Join-Path $dest $SkillMarker))) {
+            throw "Skill already exists and is not bundle-owned: $dest. Nothing was installed."
+        }
+    }
+}
+
+function Copy-Skills([string]$DestSkillsDir, [string]$Source = (Join-Path $RepoRoot 'skills')) {
+    if (-not (Test-Path $DestSkillsDir)) { New-Item -ItemType Directory -Path $DestSkillsDir -Force | Out-Null }
+    Get-ChildItem -Directory -LiteralPath $Source | ForEach-Object {
         $dest = Join-Path $DestSkillsDir $_.Name
         if (Test-Path $dest) { Remove-Item -Recurse -Force -LiteralPath $dest }
         Copy-Item -Recurse -Force -LiteralPath $_.FullName -Destination $dest
+        Write-NoBom (Join-Path $dest $SkillMarker) "agent-workflow-skills`n"
     }
+}
+
+function Set-BundleState([string]$Dir, [string]$Stage) {
+    if (-not (Test-Path $Dir)) { New-Item -ItemType Directory -Path $Dir -Force | Out-Null }
+    Copy-Item -Force (Join-Path $Stage 'model-routing.jsonc') (Join-Path $Dir 'model-routing.jsonc')
+    Copy-Item -Force (Join-Path $Stage 'install-state.json') (Join-Path $Dir 'install-state.json')
 }
 
 function Get-SpineBody {
@@ -161,32 +171,35 @@ function Set-SpineBlock([string]$File) {
 
 function Install-Cursor {
     $skillsDir = Join-Path $env:USERPROFILE '.cursor\skills'
-    Copy-Skills $skillsDir
+    Copy-Skills $skillsDir (Join-Path $script:CursorStage 'skills')
     $summary.Add("cursor: skills -> $skillsDir")
     $rulesDir = Join-Path $Project '.cursor\rules'
     if (-not (Test-Path $rulesDir)) { New-Item -ItemType Directory -Path $rulesDir -Force | Out-Null }
     $dest = Join-Path $rulesDir 'workflow-gate.mdc'
-    Copy-Item -Force -LiteralPath (Join-Path $RepoRoot 'rules\workflow-gate.mdc') -Destination $dest
+    Copy-Item -Force -LiteralPath (Join-Path $script:CursorStage 'workflow-gate.mdc') -Destination $dest
+    Copy-Item -Force -LiteralPath (Join-Path $script:CursorStage 'model-routing.mdc') -Destination (Join-Path $rulesDir 'model-routing.mdc')
+    Set-BundleState (Join-Path $Project '.cursor\agent-workflow-skills') $script:CursorStage
     $summary.Add("cursor: forced always-on spine -> $dest (alwaysApply)")
+    $summary.Add("cursor: project model adapter -> $rulesDir\model-routing.mdc")
+    $summary.Add("cursor: model binding -> $Project\.cursor\agent-workflow-skills\model-routing.jsonc")
 }
 
 function Install-OpenCode {
-    $base = Join-Path $env:USERPROFILE '.config\opencode'
+    $base = $OpenCodeBase
     $skillsDir = Join-Path $base 'skills'
-    Copy-Skills $skillsDir
+    Copy-Skills $skillsDir (Join-Path $script:OpenCodeStage 'skills')
     $summary.Add("opencode: skills -> $skillsDir")
     $agents = Join-Path $base 'AGENTS.md'
     Set-SpineBlock $agents
     $summary.Add("opencode: spine injected -> $agents (marker block)")
     $agentDir = Join-Path $base 'agents'
     if (-not (Test-Path $agentDir)) { New-Item -ItemType Directory -Path $agentDir -Force | Out-Null }
-    $models = @{ 'build.md' = $script:OpenCodeBuildModel; 'reason.md' = $script:OpenCodeReasonModel; 'review.md' = $script:OpenCodeReviewModel }
     foreach ($name in @('build.md', 'reason.md', 'review.md')) {
-        $template = Read-Utf8 (Join-Path $RepoRoot "opencode\agents\$name")
-        if (-not $template.Contains('__OPENCODE_MODEL__')) { throw "OpenCode agent template is missing its model placeholder: $name" }
-        Write-NoBom (Join-Path $agentDir $name) $template.Replace('__OPENCODE_MODEL__', $models[$name])
+        Copy-Item -Force (Join-Path $script:OpenCodeStage "agents\$name") (Join-Path $agentDir $name)
     }
+    Set-BundleState (Join-Path $base 'agent-workflow-skills') $script:OpenCodeStage
     $summary.Add("opencode: native agents -> $agentDir\{build,reason,review}.md")
+    $summary.Add("opencode: model binding -> $base\agent-workflow-skills\model-routing.jsonc")
     $configLabel = if ($script:OpenCodeConfig) { $script:OpenCodeConfig } else { 'none present; none created' }
     $summary.Add("opencode: main config untouched -> $configLabel")
 }
@@ -205,19 +218,39 @@ if (($Tool -eq 'cursor' -or $Tool -eq 'all') -and -not $Project) {
     throw '-Project is required for Cursor installation so the forced spine is installed automatically. Nothing was installed.'
 }
 if ($Tool -eq 'opencode' -or $Tool -eq 'all') {
-    Resolve-OpenCodeModels
     $script:OpenCodeConfig = Test-OpenCodeConfig
-    Test-SpineMarkerIntegrity (Join-Path $env:USERPROFILE '.config\opencode\AGENTS.md')
+    Test-SpineMarkerIntegrity (Join-Path $OpenCodeBase 'AGENTS.md')
+    $script:OpenCodeStage = New-InstallStage (Join-Path $OpenCodeBase 'agent-workflow-skills\model-routing.jsonc')
+}
+if ($Tool -eq 'cursor' -or $Tool -eq 'all') {
+    $cursorState = Join-Path $Project '.cursor\agent-workflow-skills\install-state.json'
+    $cursorBinding = Join-Path $Project '.cursor\agent-workflow-skills\model-routing.jsonc'
+    if ((Test-Path $cursorBinding) -and -not (Test-Path $cursorState)) { throw "Cursor model binding exists without bundle ownership. Nothing was installed." }
+    Test-SkillOwnership (Join-Path $env:USERPROFILE '.cursor\skills')
+    foreach ($name in @('workflow-gate.mdc', 'model-routing.mdc')) {
+        $rule = Join-Path $Project ".cursor\rules\$name"
+        if ((Test-Path $rule) -and -not (Read-Utf8 $rule).Contains('Managed by agent-workflow-skills')) {
+            throw "Cursor rule already exists and is not bundle-owned: $rule. Nothing was installed."
+        }
+    }
+    $script:CursorStage = New-InstallStage $cursorBinding
 }
 if ($Tool -eq 'claude' -or $Tool -eq 'all') {
     Test-SpineMarkerIntegrity (Join-Path $env:USERPROFILE '.claude\CLAUDE.md')
 }
 
-switch ($Tool) {
-    'cursor' { Install-Cursor }
-    'opencode' { Install-OpenCode }
-    'claude' { Install-Claude }
-    'all' { Install-Cursor; Install-OpenCode; Install-Claude }
+try {
+    switch ($Tool) {
+        'cursor' { Install-Cursor }
+        'opencode' { Install-OpenCode }
+        'claude' { Install-Claude }
+        'all' { Install-Cursor; Install-OpenCode; Install-Claude }
+    }
+}
+finally {
+    foreach ($stage in @($script:CursorStage, $script:OpenCodeStage)) {
+        if ($stage -and (Test-Path $stage)) { Remove-Item -Recurse -Force $stage }
+    }
 }
 
 Write-Host ""

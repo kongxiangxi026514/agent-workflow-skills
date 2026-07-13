@@ -9,6 +9,7 @@ set -euo pipefail
 
 TOOL="cursor"
 PROJECT=""
+OPENCODE_CONFIG_DIR=""
 OPENCODE_BUILD_MODEL="${AGENT_WORKFLOW_OPENCODE_BUILD_MODEL:-}"
 OPENCODE_REASON_MODEL="${AGENT_WORKFLOW_OPENCODE_REASON_MODEL:-}"
 OPENCODE_REVIEW_MODEL="${AGENT_WORKFLOW_OPENCODE_REVIEW_MODEL:-}"
@@ -19,12 +20,14 @@ while [ $# -gt 0 ]; do
     --tool=*) TOOL="${1#*=}"; shift ;;
     --project) PROJECT="${2:-}"; shift 2 ;;
     --project=*) PROJECT="${1#*=}"; shift ;;
-    --opencode-build-model) OPENCODE_BUILD_MODEL="${2:-}"; shift 2 ;;
-    --opencode-build-model=*) OPENCODE_BUILD_MODEL="${1#*=}"; shift ;;
-    --opencode-reason-model) OPENCODE_REASON_MODEL="${2:-}"; shift 2 ;;
-    --opencode-reason-model=*) OPENCODE_REASON_MODEL="${1#*=}"; shift ;;
-    --opencode-review-model) OPENCODE_REVIEW_MODEL="${2:-}"; shift 2 ;;
-    --opencode-review-model=*) OPENCODE_REVIEW_MODEL="${1#*=}"; shift ;;
+    --opencode-config-dir) OPENCODE_CONFIG_DIR="${2:-}"; shift 2 ;;
+    --opencode-config-dir=*) OPENCODE_CONFIG_DIR="${1#*=}"; shift ;;
+    --build-model|--opencode-build-model) OPENCODE_BUILD_MODEL="${2:-}"; shift 2 ;;
+    --build-model=*|--opencode-build-model=*) OPENCODE_BUILD_MODEL="${1#*=}"; shift ;;
+    --reason-model|--opencode-reason-model) OPENCODE_REASON_MODEL="${2:-}"; shift 2 ;;
+    --reason-model=*|--opencode-reason-model=*) OPENCODE_REASON_MODEL="${1#*=}"; shift ;;
+    --review-model|--opencode-review-model) OPENCODE_REVIEW_MODEL="${2:-}"; shift 2 ;;
+    --review-model=*|--opencode-review-model=*) OPENCODE_REVIEW_MODEL="${1#*=}"; shift ;;
     -h|--help)
       grep '^#' "$0" | sed 's/^# \{0,1\}//'
       exit 0 ;;
@@ -38,6 +41,11 @@ END_MARKER='<!-- END agent-workflow-skills spine -->'
 SUMMARY=()
 OPENCODE_CONFIG=""
 AGENT_MARKER='<!-- Managed by agent-workflow-skills. -->'
+SKILL_MARKER='.agent-workflow-skills-owned'
+OPENCODE_BASE="${OPENCODE_CONFIG_DIR:-$HOME/.config/opencode}"
+OPENCODE_STAGE=""; CURSOR_STAGE=""
+cleanup() { [ -z "$OPENCODE_STAGE" ] || rm -rf "$OPENCODE_STAGE"; [ -z "$CURSOR_STAGE" ] || rm -rf "$CURSOR_STAGE"; }
+trap cleanup EXIT
 
 resolve_python() {
   for candidate in python3 python; do
@@ -48,29 +56,14 @@ resolve_python() {
   echo "A runnable Python 3 interpreter is required to validate an existing OpenCode JSON/JSONC config safely." >&2; return 1
 }
 
-validate_opencode_model() {
-  role="$1"; value="$2"; env_name="$3"
-  if [ -z "$value" ] || [[ "$value" =~ [[:cntrl:]] ]] ||
-    ! [[ "$value" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*(/[A-Za-z0-9][A-Za-z0-9._-]*)+$ ]]; then
-    echo "OpenCode $role model is required as a safe provider/model ID. Run 'opencode models' and pass an exact available ID with --opencode-${role}-model or $env_name." >&2
-    return 1
+new_install_stage() {
+  binding="$1"; stage="$(mktemp -d)"
+  python_cmd="$(resolve_python)"
+  if ! "$python_cmd" "$REPO_ROOT/tools/prepare_install.py" "$stage" "$binding" \
+    "${OPENCODE_BUILD_MODEL:--}" "${OPENCODE_REASON_MODEL:--}" "${OPENCODE_REVIEW_MODEL:--}" >/dev/null; then
+    rm -rf "$stage"; return 1
   fi
-  IFS=/ read -ra parts <<< "$value"
-  for part in "${parts[@]}"; do
-    case "$(printf '%s' "$part" | tr '[:upper:]' '[:lower:]')" in
-      provider|model|placeholder|example|change-me|your-provider|your-model)
-        echo "OpenCode $role model must not use a placeholder token. Run 'opencode models' for an exact available ID." >&2; return 1 ;;
-    esac
-  done
-}
-
-validate_opencode_models() {
-  validate_opencode_model build "$OPENCODE_BUILD_MODEL" AGENT_WORKFLOW_OPENCODE_BUILD_MODEL || return 1
-  validate_opencode_model reason "$OPENCODE_REASON_MODEL" AGENT_WORKFLOW_OPENCODE_REASON_MODEL || return 1
-  validate_opencode_model review "$OPENCODE_REVIEW_MODEL" AGENT_WORKFLOW_OPENCODE_REVIEW_MODEL || return 1
-  if [ "$OPENCODE_REVIEW_MODEL" = "$OPENCODE_BUILD_MODEL" ] || [ "$OPENCODE_REVIEW_MODEL" = "$OPENCODE_REASON_MODEL" ]; then
-    echo "OpenCode review model must differ from build and reason models. Select exact IDs from 'opencode models' before installation." >&2; return 1
-  fi
+  printf '%s\n' "$stage"
 }
 
 assert_spine_markers() {
@@ -86,36 +79,41 @@ assert_spine_markers() {
 }
 
 preflight_opencode() {
-  base="$HOME/.config/opencode"
+  base="$OPENCODE_BASE"
   json="$base/opencode.json"
   jsonc="$base/opencode.jsonc"
-  if [ -f "$json" ] && [ -f "$jsonc" ]; then
-    echo "Both $json and $jsonc exist. OpenCode config is ambiguous; remove or rename one. Nothing was installed." >&2
-    return 1
-  fi
-  if [ -f "$jsonc" ]; then OPENCODE_CONFIG="$jsonc"
-  elif [ -f "$json" ]; then OPENCODE_CONFIG="$json"
-  fi
-  if [ -n "$OPENCODE_CONFIG" ]; then
-    python_cmd="$(resolve_python)"
-    PYTHONUTF8=1 PYTHONIOENCODING=utf-8 "$python_cmd" "$REPO_ROOT/tools/validate_jsonc.py" "$OPENCODE_CONFIG" ||
-      { echo "Invalid OpenCode config: $OPENCODE_CONFIG. Nothing was installed." >&2; return 1; }
-  fi
+  [ ! -f "$json" ] || OPENCODE_CONFIG="$json"
+  [ ! -f "$jsonc" ] || OPENCODE_CONFIG="${OPENCODE_CONFIG:+$OPENCODE_CONFIG, }$jsonc"
+  state="$base/agent-workflow-skills/install-state.json"
+  binding="$base/agent-workflow-skills/model-routing.jsonc"
+  if [ -f "$binding" ] && [ ! -f "$state" ]; then echo "Model binding exists without bundle ownership: $binding" >&2; return 1; fi
   for agent in "$base/agents/build.md" "$base/agents/reason.md" "$base/agents/review.md"; do
     if [ -f "$agent" ] && ! grep -Fq "$AGENT_MARKER" "$agent"; then
       echo "OpenCode agent already exists and is not bundle-owned: $agent. Nothing was installed." >&2
       return 1
     fi
   done
+  preflight_skills "$base/skills"
+}
+
+preflight_skills() {
+  dest="$1"
+  for d in "$REPO_ROOT"/skills/*/; do
+    target="$dest/$(basename "$d")"
+    if [ -d "$target" ] && [ ! -f "$target/$SKILL_MARKER" ]; then
+      echo "Skill already exists and is not bundle-owned: $target. Nothing was installed." >&2; return 1
+    fi
+  done
 }
 
 copy_skills() {
-  dest="$1"
+  dest="$1"; source="${2:-$REPO_ROOT/skills}"
   mkdir -p "$dest"
-  for d in "$REPO_ROOT"/skills/*/; do
+  for d in "$source"/*/; do
     name="$(basename "$d")"
     rm -rf "$dest/$name"
     cp -R "$d" "$dest/$name"
+    printf 'agent-workflow-skills\n' > "$dest/$name/$SKILL_MARKER"
   done
 }
 
@@ -159,25 +157,31 @@ render_opencode_agent() {
 
 install_cursor() {
   skills_dir="$HOME/.cursor/skills"
-  copy_skills "$skills_dir"
+  copy_skills "$skills_dir" "$CURSOR_STAGE/skills"
   SUMMARY+=("cursor: skills -> $skills_dir")
   rules_dir="$PROJECT/.cursor/rules"
   mkdir -p "$rules_dir"
-  cp -f "$REPO_ROOT/rules/workflow-gate.mdc" "$rules_dir/workflow-gate.mdc"
+  cp -f "$CURSOR_STAGE/workflow-gate.mdc" "$rules_dir/workflow-gate.mdc"
+  cp -f "$CURSOR_STAGE/model-routing.mdc" "$rules_dir/model-routing.mdc"
+  mkdir -p "$PROJECT/.cursor/agent-workflow-skills"
+  cp -f "$CURSOR_STAGE/model-routing.jsonc" "$CURSOR_STAGE/install-state.json" "$PROJECT/.cursor/agent-workflow-skills/"
   SUMMARY+=("cursor: forced always-on spine -> $rules_dir/workflow-gate.mdc (alwaysApply)")
+  SUMMARY+=("cursor: project model adapter -> $rules_dir/model-routing.mdc")
+  SUMMARY+=("cursor: model binding -> $PROJECT/.cursor/agent-workflow-skills/model-routing.jsonc")
 }
 
 install_opencode() {
-  base="$HOME/.config/opencode"
-  copy_skills "$base/skills"
+  base="$OPENCODE_BASE"
+  copy_skills "$base/skills" "$OPENCODE_STAGE/skills"
   SUMMARY+=("opencode: skills -> $base/skills")
   set_spine_block "$base/AGENTS.md"
   SUMMARY+=("opencode: spine injected -> $base/AGENTS.md (marker block)")
   mkdir -p "$base/agents"
-  render_opencode_agent build "$OPENCODE_BUILD_MODEL" "$base/agents/build.md"
-  render_opencode_agent reason "$OPENCODE_REASON_MODEL" "$base/agents/reason.md"
-  render_opencode_agent review "$OPENCODE_REVIEW_MODEL" "$base/agents/review.md"
+  cp -f "$OPENCODE_STAGE"/agents/*.md "$base/agents/"
+  mkdir -p "$base/agent-workflow-skills"
+  cp -f "$OPENCODE_STAGE/model-routing.jsonc" "$OPENCODE_STAGE/install-state.json" "$base/agent-workflow-skills/"
   SUMMARY+=("opencode: native agents -> $base/agents/{build,reason,review}.md")
+  SUMMARY+=("opencode: model binding -> $base/agent-workflow-skills/model-routing.jsonc")
   config_label="${OPENCODE_CONFIG:-none present; none created}"
   SUMMARY+=("opencode: main config untouched -> $config_label")
 }
@@ -195,9 +199,22 @@ if { [ "$TOOL" = cursor ] || [ "$TOOL" = all ]; } && [ -z "$PROJECT" ]; then
   exit 1
 fi
 if [ "$TOOL" = opencode ] || [ "$TOOL" = all ]; then
-  validate_opencode_models
   preflight_opencode
-  assert_spine_markers "$HOME/.config/opencode/AGENTS.md"
+  assert_spine_markers "$OPENCODE_BASE/AGENTS.md"
+  OPENCODE_STAGE="$(new_install_stage "$OPENCODE_BASE/agent-workflow-skills/model-routing.jsonc")"
+fi
+if [ "$TOOL" = cursor ] || [ "$TOOL" = all ]; then
+  state="$PROJECT/.cursor/agent-workflow-skills/install-state.json"
+  binding="$PROJECT/.cursor/agent-workflow-skills/model-routing.jsonc"
+  if [ -f "$binding" ] && [ ! -f "$state" ]; then echo "Cursor model binding exists without bundle ownership." >&2; exit 1; fi
+    preflight_skills "$HOME/.cursor/skills"
+  for rule in workflow-gate.mdc model-routing.mdc; do
+    path="$PROJECT/.cursor/rules/$rule"
+    if [ -f "$path" ] && ! grep -Fq 'Managed by agent-workflow-skills' "$path"; then
+      echo "Cursor rule already exists and is not bundle-owned: $path" >&2; exit 1
+    fi
+  done
+  CURSOR_STAGE="$(new_install_stage "$binding")"
 fi
 if [ "$TOOL" = claude ] || [ "$TOOL" = all ]; then assert_spine_markers "$HOME/.claude/CLAUDE.md"; fi
 
