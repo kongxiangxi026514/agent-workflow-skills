@@ -9,6 +9,7 @@ set -euo pipefail
 
 TOOL="cursor"
 PROJECT=""
+OPENCODE_CONFIG_DIR=""
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -16,6 +17,8 @@ while [ $# -gt 0 ]; do
     --tool=*) TOOL="${1#*=}"; shift ;;
     --project) PROJECT="${2:-}"; shift 2 ;;
     --project=*) PROJECT="${1#*=}"; shift ;;
+    --opencode-config-dir) OPENCODE_CONFIG_DIR="${2:-}"; shift 2 ;;
+    --opencode-config-dir=*) OPENCODE_CONFIG_DIR="${1#*=}"; shift ;;
     -h|--help)
       grep '^#' "$0" | sed 's/^# \{0,1\}//'
       exit 0 ;;
@@ -27,6 +30,8 @@ REPO_ROOT="$(cd "$(dirname "$0")" && pwd)"
 BEGIN_MARKER='<!-- BEGIN agent-workflow-skills spine -->'
 END_MARKER='<!-- END agent-workflow-skills spine -->'
 AGENT_MARKER='<!-- Managed by agent-workflow-skills. -->'
+SKILL_MARKER='.agent-workflow-skills-owned'
+OPENCODE_BASE="${OPENCODE_CONFIG_DIR:-$HOME/.config/opencode}"
 SUMMARY=()
 
 remove_skills() {
@@ -35,7 +40,7 @@ remove_skills() {
   [ -d "$dest" ] || return 0
   for d in "$REPO_ROOT"/skills/*/; do
     name="$(basename "$d")"
-    rm -rf "$dest/$name"
+    if [ -f "$dest/$name/$SKILL_MARKER" ]; then rm -rf "$dest/$name"; fi
   done
 }
 
@@ -63,17 +68,23 @@ remove_spine_block() {
 
 uninstall_cursor() {
   skills_dir="$HOME/.cursor/skills"
+  state="${PROJECT:+$PROJECT/.cursor/agent-workflow-skills/install-state.json}"
+  owned=0; [ -z "$state" ] || [ ! -f "$state" ] || owned=1
   remove_skills "$skills_dir"
   SUMMARY+=("cursor: removed bundle skills from $skills_dir")
   if [ -n "$PROJECT" ]; then
     dest="$PROJECT/.cursor/rules/workflow-gate.mdc"
-    if [ -f "$dest" ] && cmp -s "$REPO_ROOT/rules/workflow-gate.mdc" "$dest"; then rm -f "$dest"; fi
+    for rule in "$dest" "$PROJECT/.cursor/rules/model-routing.mdc"; do
+      if [ -f "$rule" ] && grep -Fq 'Managed by agent-workflow-skills' "$rule"; then rm -f "$rule"; fi
+    done
+    if [ "$owned" = 1 ]; then rm -f "$PROJECT/.cursor/agent-workflow-skills/model-routing.jsonc" "$state"; fi
     SUMMARY+=("cursor: processed spine rule $dest (removed only when bundle-owned)")
   fi
 }
 
 uninstall_opencode() {
-  base="$HOME/.config/opencode"
+  base="$OPENCODE_BASE"; state="$base/agent-workflow-skills/install-state.json"
+  owned=0; [ ! -f "$state" ] || owned=1
   remove_skills "$base/skills"
   SUMMARY+=("opencode: removed bundle skills from $base/skills")
   remove_spine_block "$base/AGENTS.md"
@@ -82,6 +93,7 @@ uninstall_opencode() {
     if [ -f "$agent" ] && grep -Fq "$AGENT_MARKER" "$agent"; then rm -f "$agent"; fi
   done
   SUMMARY+=("opencode: processed native agents in $base/agents (removed only when bundle-owned; main config untouched)")
+  if [ "$owned" = 1 ]; then rm -f "$base/agent-workflow-skills/model-routing.jsonc" "$state"; fi
 }
 
 uninstall_claude() {
@@ -92,7 +104,7 @@ uninstall_claude() {
   SUMMARY+=("claude: removed spine marker block from $base/CLAUDE.md")
 }
 
-if [ "$TOOL" = opencode ] || [ "$TOOL" = all ]; then assert_spine_markers "$HOME/.config/opencode/AGENTS.md"; fi
+if [ "$TOOL" = opencode ] || [ "$TOOL" = all ]; then assert_spine_markers "$OPENCODE_BASE/AGENTS.md"; fi
 if [ "$TOOL" = claude ] || [ "$TOOL" = all ]; then assert_spine_markers "$HOME/.claude/CLAUDE.md"; fi
 
 case "$TOOL" in
@@ -106,4 +118,5 @@ esac
 echo ""
 echo "=== agent-workflow-skills uninstall summary (tool=$TOOL) ==="
 for line in "${SUMMARY[@]}"; do echo "  - $line"; done
+if [ "$TOOL" = opencode ] || [ "$TOOL" = all ]; then echo "Restart OpenCode to unload the removed files."; fi
 echo "Done."

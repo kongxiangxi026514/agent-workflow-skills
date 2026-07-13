@@ -1,5 +1,5 @@
 """Stage validated, portable installer artifacts before target mutation."""
-import json, re, shutil, sys
+import hashlib, json, re, shutil, sys
 from pathlib import Path
 
 from validate_jsonc import normalize_jsonc
@@ -48,6 +48,11 @@ def _render(source, target, replacements):
     target.write_text(text, encoding="utf-8", newline="\n")
 
 
+def _hash(path):
+    """Return the content digest recorded in the owned-artifact manifest."""
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
 def _stage(stage, binding_path, supplied):
     data, models = _binding(binding_path, supplied)
     stage.mkdir(parents=True, exist_ok=True)
@@ -66,7 +71,14 @@ def _stage(stage, binding_path, supplied):
     )
     binding_text = "// Edit role IDs, then rerun the installer.\n" + json.dumps(data, ensure_ascii=False, indent=2) + "\n"
     (stage / "model-routing.jsonc").write_text(binding_text, encoding="utf-8", newline="\n")
-    state = {"bundle": "agent-workflow-skills", "version": 1}
+    owned = [stage / "workflow-gate.mdc", stage / "model-routing.mdc", stage / "model-routing.jsonc"]
+    owned.extend((stage / "agents").glob("*.md"))
+    owned.extend((stage / "skills").glob("*/SKILL.md"))
+    state = {
+        "bundle": "agent-workflow-skills",
+        "version": 1,
+        "owned_sha256": {str(path.relative_to(stage)).replace("\\", "/"): _hash(path) for path in owned},
+    }
     (stage / "install-state.json").write_text(json.dumps(state, indent=2) + "\n", encoding="utf-8", newline="\n")
     portable = [stage / "workflow-gate.mdc", *(stage / "skills").glob("*/SKILL.md")]
     text = "\n".join(path.read_text(encoding="utf-8").lower() for path in portable)

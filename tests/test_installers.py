@@ -1,4 +1,4 @@
-import os, shutil, subprocess, tempfile, unittest
+import json, os, shutil, subprocess, tempfile, unittest
 from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SKILLS = ("code-review", "first-principles", "memory-gate", "parallel-dispatch", "research-routing")
@@ -160,6 +160,16 @@ class InstallerTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(skill.read_text(encoding="utf-8"), "user-owned\n")
         self.assertFalse(self.binding.exists())
+        shutil.rmtree(skill.parent)
+        self.assertEqual(self.invoke("install.ps1", "opencode", *MODELS).returncode, 0)
+        marker = skill.parent / ".agent-workflow-skills-owned"
+        marker.unlink()
+        skill.write_text("user replacement\n", encoding="utf-8")
+        before = skill.read_bytes()
+        self.assertNotEqual(self.invoke("install.ps1", "opencode").returncode, 0)
+        self.assertEqual(skill.read_bytes(), before)
+        self.assertEqual(self.invoke("uninstall.ps1", "opencode").returncode, 0)
+        self.assertEqual(skill.read_bytes(), before)
     def test_config_dir_override_and_failed_refresh_are_safe(self):
         custom = self.home / "自定义配置"
         args = ("-OpenCodeConfigDir", str(custom), *MODELS)
@@ -170,6 +180,8 @@ class InstallerTests(unittest.TestCase):
         binding.write_text('{"build":"acme/terra","reason":null,"review":"acme/terra"}', encoding="utf-8")
         self.assertNotEqual(self.invoke("install.ps1", "opencode", "-OpenCodeConfigDir", str(custom)).returncode, 0)
         self.assertEqual(agent.read_bytes(), before)
+        state = json.loads((custom / "agent-workflow-skills/install-state.json").read_text(encoding="utf-8"))
+        self.assertIn("agents/build.md", state["owned_sha256"])
         self.assertEqual(self.invoke("uninstall.ps1", "opencode", "-OpenCodeConfigDir", str(custom)).returncode, 0)
         self.assertFalse(agent.exists())
     def test_portable_runtime_policy_contains_roles_not_model_ids(self):

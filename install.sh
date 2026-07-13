@@ -86,22 +86,21 @@ preflight_opencode() {
   [ ! -f "$jsonc" ] || OPENCODE_CONFIG="${OPENCODE_CONFIG:+$OPENCODE_CONFIG, }$jsonc"
   state="$base/agent-workflow-skills/install-state.json"
   binding="$base/agent-workflow-skills/model-routing.jsonc"
-  legacy=0; [ ! -f "$base/AGENTS.md" ] || grep -Fq "$BEGIN_MARKER" "$base/AGENTS.md" && legacy=1
   if [ -f "$binding" ] && [ ! -f "$state" ]; then echo "Model binding exists without bundle ownership: $binding" >&2; return 1; fi
   for agent in "$base/agents/build.md" "$base/agents/reason.md" "$base/agents/review.md"; do
-    if [ -f "$agent" ] && [ ! -f "$state" ] && [ "$legacy" = 0 ] && ! grep -Fq "$AGENT_MARKER" "$agent"; then
+    if [ -f "$agent" ] && ! grep -Fq "$AGENT_MARKER" "$agent"; then
       echo "OpenCode agent already exists and is not bundle-owned: $agent. Nothing was installed." >&2
       return 1
     fi
   done
-  preflight_skills "$base/skills" "$([ -f "$state" ] || [ "$legacy" = 1 ]; echo $?)"
+  preflight_skills "$base/skills"
 }
 
 preflight_skills() {
-  dest="$1"; owned_status="$2"
+  dest="$1"
   for d in "$REPO_ROOT"/skills/*/; do
     target="$dest/$(basename "$d")"
-    if [ -d "$target" ] && [ "$owned_status" != 0 ] && [ ! -f "$target/$SKILL_MARKER" ]; then
+    if [ -d "$target" ] && [ ! -f "$target/$SKILL_MARKER" ]; then
       echo "Skill already exists and is not bundle-owned: $target. Nothing was installed." >&2; return 1
     fi
   done
@@ -208,11 +207,10 @@ if [ "$TOOL" = cursor ] || [ "$TOOL" = all ]; then
   state="$PROJECT/.cursor/agent-workflow-skills/install-state.json"
   binding="$PROJECT/.cursor/agent-workflow-skills/model-routing.jsonc"
   if [ -f "$binding" ] && [ ! -f "$state" ]; then echo "Cursor model binding exists without bundle ownership." >&2; exit 1; fi
-  legacy=1; [ ! -f "$PROJECT/.cursor/rules/workflow-gate.mdc" ] || legacy=0
-  preflight_skills "$HOME/.cursor/skills" "$([ -f "$state" ] || [ "$legacy" = 0 ]; echo $?)"
+    preflight_skills "$HOME/.cursor/skills"
   for rule in workflow-gate.mdc model-routing.mdc; do
     path="$PROJECT/.cursor/rules/$rule"
-    if [ -f "$path" ] && [ ! -f "$state" ] && ! grep -Fq 'Managed by agent-workflow-skills' "$path"; then
+    if [ -f "$path" ] && ! grep -Fq 'Managed by agent-workflow-skills' "$path"; then
       echo "Cursor rule already exists and is not bundle-owned: $path" >&2; exit 1
     fi
   done

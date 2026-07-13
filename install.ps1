@@ -75,7 +75,7 @@ function New-InstallStage([string]$Binding) {
     $build = if ($BuildModel) { $BuildModel } else { '-' }
     $reason = if ($ReasonModel) { $ReasonModel } else { '-' }
     $review = if ($ReviewModel) { $ReviewModel } else { '-' }
-    $values = @(& $python (Join-Path $RepoRoot 'tools\prepare_install.py') $stage $Binding $build $reason $review)
+    & $python (Join-Path $RepoRoot 'tools\prepare_install.py') $stage $Binding $build $reason $review | Out-Null
     if ($LASTEXITCODE -ne 0) {
         if (Test-Path $stage) { Remove-Item -Recurse -Force $stage }
         throw "Model binding validation failed. Nothing was installed."
@@ -100,24 +100,22 @@ function Test-OpenCodeConfig {
     $present = @('opencode.json', 'opencode.jsonc') | Where-Object { Test-Path -LiteralPath (Join-Path $OpenCodeBase $_) }
     $config = if ($present.Count) { ($present | ForEach-Object { Join-Path $OpenCodeBase $_ }) -join ', ' } else { $null }
     $state = Join-Path $OpenCodeBase 'agent-workflow-skills\install-state.json'
-    $legacy = (Test-Path (Join-Path $OpenCodeBase 'AGENTS.md')) -and (Read-Utf8 (Join-Path $OpenCodeBase 'AGENTS.md')).Contains($BeginMarker)
-    $owned = (Test-Path $state) -or $legacy
     $binding = Join-Path $OpenCodeBase 'agent-workflow-skills\model-routing.jsonc'
     if ((Test-Path $binding) -and -not (Test-Path $state)) { throw "Model binding exists without bundle ownership: $binding. Nothing was installed." }
     foreach ($name in @('build.md', 'reason.md', 'review.md')) {
         $agent = Join-Path $OpenCodeBase "agents\$name"
-        if ((Test-Path -LiteralPath $agent) -and -not $owned -and -not (Read-Utf8 $agent).Contains($AgentMarker)) {
+        if ((Test-Path -LiteralPath $agent) -and -not (Read-Utf8 $agent).Contains($AgentMarker)) {
             throw "OpenCode agent already exists and is not bundle-owned: $agent. Nothing was installed."
         }
     }
-    Test-SkillOwnership (Join-Path $OpenCodeBase 'skills') $owned
+    Test-SkillOwnership (Join-Path $OpenCodeBase 'skills')
     return $config
 }
 
-function Test-SkillOwnership([string]$DestSkillsDir, [bool]$LegacyOwned) {
+function Test-SkillOwnership([string]$DestSkillsDir) {
     Get-ChildItem -Directory -LiteralPath (Join-Path $RepoRoot 'skills') | ForEach-Object {
         $dest = Join-Path $DestSkillsDir $_.Name
-        if ((Test-Path $dest) -and -not $LegacyOwned -and -not (Test-Path (Join-Path $dest $SkillMarker))) {
+        if ((Test-Path $dest) -and -not (Test-Path (Join-Path $dest $SkillMarker))) {
             throw "Skill already exists and is not bundle-owned: $dest. Nothing was installed."
         }
     }
@@ -228,11 +226,10 @@ if ($Tool -eq 'cursor' -or $Tool -eq 'all') {
     $cursorState = Join-Path $Project '.cursor\agent-workflow-skills\install-state.json'
     $cursorBinding = Join-Path $Project '.cursor\agent-workflow-skills\model-routing.jsonc'
     if ((Test-Path $cursorBinding) -and -not (Test-Path $cursorState)) { throw "Cursor model binding exists without bundle ownership. Nothing was installed." }
-    $legacyCursor = Test-Path (Join-Path $Project '.cursor\rules\workflow-gate.mdc')
-    Test-SkillOwnership (Join-Path $env:USERPROFILE '.cursor\skills') ((Test-Path $cursorState) -or $legacyCursor)
+    Test-SkillOwnership (Join-Path $env:USERPROFILE '.cursor\skills')
     foreach ($name in @('workflow-gate.mdc', 'model-routing.mdc')) {
         $rule = Join-Path $Project ".cursor\rules\$name"
-        if ((Test-Path $rule) -and -not (Test-Path $cursorState) -and -not (Read-Utf8 $rule).Contains('Managed by agent-workflow-skills')) {
+        if ((Test-Path $rule) -and -not (Read-Utf8 $rule).Contains('Managed by agent-workflow-skills')) {
             throw "Cursor rule already exists and is not bundle-owned: $rule. Nothing was installed."
         }
     }
