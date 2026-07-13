@@ -12,14 +12,13 @@ description: Decide parallel vs serial subagent decomposition, apply role-based 
 - Before parallelizing, compute whether it is worth it (parallel multiplies token cost); if not clearly independent, keep one worker (it may split internally).
 - After parallel workers return, the main agent merges, checks for write conflicts / interface drift, and runs integrated verification before accepting.
 
-## Role-based model routing (single source = `config/model-routing.md`)
+## Role-based model routing
 
-- Routing is by ROLE, not hardcoded here. `config/model-routing.md` is the source of truth; OpenCode renders the role policy in `opencode/agents/{build,reason,review}.md` from user-supplied provider/model IDs without editing the user's main config.
-- Implementation / refactor / debugging / normal architecture → Terra: `gpt-5.6-terra-xhigh`.
-- Genuinely complex or difficult design and diagnosis requiring deep reasoning → Sol: `gpt-5.6-sol-xhigh`. Escalate only for a non-obvious cross-system trade-off, an uncertain root cause, or a contract-level decision requiring multi-step reasoning.
-- Review / verification → GLM: `glm-5.2-max`, a DIFFERENT model family from both Terra and Sol. No same-family self-verification.
-- When dispatching subagents: pass Terra for routine build tasks, Sol for qualifying deep-reasoning work, and GLM for review or verification. OpenCode exposes build/reason/review agents; select its exact installed IDs and choose a genuinely different provider/model family for review.
-- Quality first, cost is secondary: avoid unnecessary Sol escalation, keep the fan-out bounded, and do not duplicate research or re-runs.
+- `build`: implementation, refactoring, debugging, and normal architecture.
+- `reason`: only non-obvious cross-system trade-offs, uncertain root causes, or contract-level decisions requiring multi-step reasoning.
+- `review`: independent review and verification with a different model from `build` and effective `reason`.
+- Resolve role IDs from the active tool's machine-local binding. A null `reason` reuses `build`; ID inequality is enforceable, but provider strings do not prove family separation.
+- Quality first, cost secondary: avoid unnecessary `reason` escalation, bound fan-out, and avoid duplicate work.
 
 ## Context budget + circuit breaker
 

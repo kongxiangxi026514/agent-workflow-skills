@@ -1,0 +1,13 @@
+---
+description: Project-local model bindings for portable workflow roles.
+alwaysApply: true
+---
+
+# Model bindings
+
+- `build`: `__BUILD_MODEL__`
+- `reason`: `__REASON_MODEL__`
+- `review`: `__REVIEW_MODEL__`
+
+Use these project-local bindings for dispatch. Review must remain independent; the installer enforces ID inequality, not model-family identity.
+<!-- Managed by agent-workflow-skills. -->

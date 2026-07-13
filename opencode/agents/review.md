@@ -5,4 +5,4 @@ mode: subagent
 permission:
   edit: deny
 ---
-Review with this configured model. It must be a genuinely different provider/model family from the configured build and reason agents. <!-- Managed by agent-workflow-skills. -->
+Review independently with this configured model. The installer enforces ID inequality; the operator remains responsible for model-family independence. <!-- Managed by agent-workflow-skills. -->

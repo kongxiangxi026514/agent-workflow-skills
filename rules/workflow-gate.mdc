@@ -2,6 +2,7 @@
 description: Always-on workflow spine — per-turn A/B/C/D gate, main/subagent orchestration, model routing, code-quality & architecture contract.
 alwaysApply: true
 ---
+<!-- Managed by agent-workflow-skills. -->
 
 # Workflow Gate (spine)
 
@@ -41,6 +42,10 @@ Run real verification commands before saying "done/passing". Commit only the cur
 
 At key checkpoints (before dispatching parallel work / at path C/D design-decision points / before claiming completion), briefly answer two questions: (1) What are you least confident about? (2) What is the biggest omission / what am I not aware of? Skip trivial path-A turns to avoid ritual noise.
 
-## Model routing (dynamic single point)
+## Model routing (portable roles)
 
-Use `gpt-5.6-terra-xhigh` for implementation, refactoring, debugging, and normal architecture work. Escalate only genuinely complex or difficult design and diagnosis that require deep reasoning to `gpt-5.6-sol-xhigh`; qualifying cases include a non-obvious cross-system trade-off, an uncertain root cause, or a contract-level decision requiring multi-step reasoning. Use `glm-5.2-max` for review and verification. The reviewer MUST be a different model family from both the implementation and deep-reasoning models. `config/model-routing.md` is the source of truth; sync its roles here and in `skills/parallel-dispatch/SKILL.md`. For OpenCode, install renders separate build/reason/review agents from explicit user-supplied provider/model IDs; never assume Cursor slugs map to those IDs.
+- `build`: implementation, refactoring, debugging, and normal architecture work.
+- `reason`: only genuinely complex reasoning for a non-obvious cross-system trade-off, uncertain root cause, or contract-level decision requiring multi-step reasoning.
+- `review`: independent review and verification, using a different model from `build` and effective `reason`.
+
+Resolve roles through the machine-local binding installed for the active tool. A null `reason` binding reuses `build`. Identifier inequality is enforceable; provider strings do not prove different model families.
