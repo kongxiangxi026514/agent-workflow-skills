@@ -2,7 +2,7 @@
 name: research-routing
 description: "Select evidence tools for external documentation, web, papers, and repositories."
 ---
-<!-- GENERATED; policy_id=P02; source=policy-v3/fragments/research-routing.md; source_sha256=3e480469324da98f602ef58b789928951f46fed70fd35ff4c8ee4b6965865eeb; registry_sha256=7e2c89e18d48d1ac4fc33a9a949952dd26e96af66fe90f6051151f6726172261 -->
+<!-- GENERATED; policy_id=P02; source=policy-v3/fragments/research-routing.md; source_sha256=3e480469324da98f602ef58b789928951f46fed70fd35ff4c8ee4b6965865eeb; registry_sha256=774f226f2600847405f2d0c038583e051108693286dad5a72490d793332a10ec -->
 
 # Research Routing
 

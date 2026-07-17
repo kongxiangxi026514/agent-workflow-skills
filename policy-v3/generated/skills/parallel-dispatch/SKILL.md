@@ -2,7 +2,7 @@
 name: parallel-dispatch
 description: "Choose serial or parallel workers and enforce bounded task capsules."
 ---
-<!-- GENERATED; policy_id=P05; source=policy-v3/fragments/parallel-dispatch.md; source_sha256=eb8cfebb1e14ea0e7c188f4d75b66387e56935c2bd47757df36a207b2a1ac631; registry_sha256=7e2c89e18d48d1ac4fc33a9a949952dd26e96af66fe90f6051151f6726172261 -->
+<!-- GENERATED; policy_id=P05; source=policy-v3/fragments/parallel-dispatch.md; source_sha256=eb8cfebb1e14ea0e7c188f4d75b66387e56935c2bd47757df36a207b2a1ac631; registry_sha256=774f226f2600847405f2d0c038583e051108693286dad5a72490d793332a10ec -->
 
 # Parallel Dispatch
 

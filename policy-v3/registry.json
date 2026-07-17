@@ -7,6 +7,28 @@
     "capsule_min": 300,
     "capsule_max": 800
   },
+  "profiles": {
+    "lean": {
+      "escalation": {
+        "ordinary_change_min_paths": 2,
+        "ordinary_path_count": 3
+      },
+      "budget": {
+        "l0_max": 1100,
+        "capsule_max": 600
+      }
+    },
+    "balanced": {
+      "escalation": {
+        "ordinary_change_min_paths": 0,
+        "ordinary_path_count": 2
+      },
+      "budget": {
+        "l0_max": 1500,
+        "capsule_max": 800
+      }
+    }
+  },
   "router": {
     "risk_order": ["R0", "R1", "R2"],
     "quick_override_patterns": [

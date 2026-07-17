@@ -24,6 +24,20 @@ def load_registry(root: Path | str = DEFAULT_ROOT) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def _profile_settings(registry: dict, profile: str) -> dict:
+    """Validate and return thresholds for one named installation profile."""
+    try:
+        settings = registry["profiles"][profile]
+        escalation = settings["escalation"]
+        budget = settings["budget"]
+    except KeyError as error:
+        raise ValueError(f"unknown or incomplete installer profile: {profile}") from error
+    required_escalation = {"ordinary_change_min_paths", "ordinary_path_count"}
+    if set(escalation) != required_escalation or set(budget) != {"l0_max", "capsule_max"}:
+        raise ValueError(f"invalid installer profile: {profile}")
+    return settings
+
+
 def _matches(patterns: Iterable[str], text: str) -> bool:
     return any(re.search(pattern, text, flags=re.IGNORECASE) for pattern in patterns)
 
@@ -57,7 +71,7 @@ def _dependency_closure(selected: set[str], policies_by_id: dict[str, dict]) -> 
     return selected
 
 
-def _base_risk(text: str, paths: Sequence[str], router: dict) -> str:
+def _base_risk(text: str, paths: Sequence[str], router: dict, escalation: dict) -> str:
     if _matches(router["strict_override_patterns"], text):
         return "R2"
     high_risk = _matches(router["high_risk_patterns"], text)
@@ -65,16 +79,27 @@ def _base_risk(text: str, paths: Sequence[str], router: dict) -> str:
     if high_risk:
         return "R2"
     lean = len(paths) <= 1 and _matches(router["lean_change_patterns"], text)
-    ordinary = len(paths) > 1 or _matches(router["change_patterns"], text)
+    ordinary = len(paths) >= escalation["ordinary_path_count"]
+    ordinary = ordinary or (
+        len(paths) >= escalation["ordinary_change_min_paths"]
+        and _matches(router["change_patterns"], text)
+    )
     risk = "R0" if lean or not ordinary else "R1"
     if risk == "R1" and _matches(router["quick_override_patterns"], text):
         return "R0"
     return risk
 
 
-def route_task(text: str, paths: Sequence[str] = (), *, root: Path | str = DEFAULT_ROOT) -> dict:
+def route_task(
+    text: str,
+    paths: Sequence[str] = (),
+    *,
+    profile: str = "balanced",
+    root: Path | str = DEFAULT_ROOT,
+) -> dict:
     """Classify a task and return the exact ordered on-demand policy set."""
     registry = load_registry(root)
+    settings = _profile_settings(registry, profile)
     policies = registry["policies"]
     policies_by_id = {policy["policy_id"]: policy for policy in policies}
     triggered = {policy["policy_id"] for policy in policies if _policy_matches(policy, text)}
@@ -88,7 +113,7 @@ def route_task(text: str, paths: Sequence[str] = (), *, root: Path | str = DEFAU
         risk = _risk_max((policies_by_id[item]["risk"] for item in selected), registry["router"]["risk_order"])
         return {"risk": risk, "loaded_policy_ids": sorted(selected)}
 
-    base_risk = _base_risk(text, paths, registry["router"])
+    base_risk = _base_risk(text, paths, registry["router"], settings["escalation"])
     policy_risks = [policies_by_id[item]["risk"] for item in triggered]
     risk = _risk_max([base_risk, *policy_risks], registry["router"]["risk_order"])
     selected = triggered | set(registry["router"]["risk_auto_load"][risk])
@@ -113,10 +138,12 @@ def build_task_capsule(
     acceptance: Sequence[str],
     loaded_policy_ids: Sequence[str],
     artifact_pointers: Sequence[str],
+    profile: str = "balanced",
     root: Path | str = DEFAULT_ROOT,
 ) -> str:
     """Fill the canonical capsule template and enforce its proxy budget."""
     registry = load_registry(root)
+    settings = _profile_settings(registry, profile)
     policy = next(item for item in registry["policies"] if item["policy_id"] == "P07")
     template = (Path(root) / policy["source"]).read_text(encoding="utf-8")
     values = {
@@ -135,6 +162,7 @@ def build_task_capsule(
     )
     budget = registry["token_proxy"]
     proxy = token_proxy(capsule)
-    if not budget["capsule_min"] <= proxy <= budget["capsule_max"]:
-        raise ValueError(f"task capsule proxy {proxy} outside {budget['capsule_min']}..{budget['capsule_max']}")
+    capsule_max = min(budget["capsule_max"], settings["budget"]["capsule_max"])
+    if not budget["capsule_min"] <= proxy <= capsule_max:
+        raise ValueError(f"task capsule proxy {proxy} outside {budget['capsule_min']}..{capsule_max}")
     return capsule

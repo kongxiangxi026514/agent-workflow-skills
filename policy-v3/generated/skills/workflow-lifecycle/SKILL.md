@@ -2,7 +2,7 @@
 name: workflow-lifecycle
 description: "Discovery, planning, TDD, acceptance, and closeout for R1/R2 work."
 ---
-<!-- GENERATED; policy_id=P01; source=policy-v3/fragments/workflow-lifecycle.md; source_sha256=88ad552945b13b301cc291b0ab55548891c5de65b723976131ec7d13c4ebf48f; registry_sha256=7e2c89e18d48d1ac4fc33a9a949952dd26e96af66fe90f6051151f6726172261 -->
+<!-- GENERATED; policy_id=P01; source=policy-v3/fragments/workflow-lifecycle.md; source_sha256=88ad552945b13b301cc291b0ab55548891c5de65b723976131ec7d13c4ebf48f; registry_sha256=774f226f2600847405f2d0c038583e051108693286dad5a72490d793332a10ec -->
 
 # Workflow Lifecycle
 

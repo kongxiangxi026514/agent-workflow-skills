@@ -82,6 +82,34 @@ class RouterAndCapsuleTests(PolicyV3TestCase):
                 self.assertEqual(first["risk"], case["expected_risk"])
                 self.assertEqual(first["loaded_policy_ids"], case["expected_policies"])
 
+    def test_profiles_only_change_r0_r1_escalation_and_budget(self):
+        router = self.load_tool("policy_router")
+        lean = router.route_task("Implement a local helper.", ["tools/helper.py"], profile="lean", root=ROOT)
+        balanced = router.route_task(
+            "Implement a local helper.", ["tools/helper.py"], profile="balanced", root=ROOT
+        )
+        self.assertEqual(lean, {"risk": "R0", "loaded_policy_ids": []})
+        self.assertEqual(balanced, {"risk": "R1", "loaded_policy_ids": ["P01"]})
+        high_risk_text = "Modify the geometry contract."
+        paths = ["geometry/transform.py"]
+        self.assertEqual(
+            router.route_task(high_risk_text, paths, profile="lean", root=ROOT),
+            router.route_task(high_risk_text, paths, profile="balanced", root=ROOT),
+        )
+        capsule = router.build_task_capsule(
+            goal="Implement profile routing.",
+            non_goals=[],
+            risk="R1",
+            allowed_scope=["tools/"],
+            forbidden_scope=[],
+            acceptance=["Targeted tests pass."],
+            loaded_policy_ids=["P01"],
+            artifact_pointers=["policy-v3/registry.json"],
+            profile="lean",
+            root=ROOT,
+        )
+        self.assertLessEqual(router.token_proxy(capsule), 600)
+
     def test_negative_cases_do_not_overroute(self):
         router = self.load_tool("policy_router")
         for case in _json(ROOT / "tests/router_negative_cases.json"):
@@ -148,6 +176,28 @@ class RendererAndAuditTests(PolicyV3TestCase):
             first = next(iter(expected))
             (sandbox / first).write_text("stale\n", encoding="utf-8")
             self.assertEqual(renderer.detect_drift(sandbox, expected), [first.as_posix()])
+
+    def test_profile_adapters_are_provenanced_and_have_distinct_thresholds(self):
+        renderer = self.load_tool("render_policy")
+        self.assertEqual(renderer.profile_names(ROOT), ("balanced", "lean"))
+        cursor_lean = renderer.expected_profile_adapter(ROOT, "cursor", "lean")
+        opencode_balanced = renderer.expected_profile_adapter(ROOT, "opencode", "balanced")
+        self.assertIn("profile=lean", cursor_lean)
+        self.assertIn("profile=balanced", opencode_balanced)
+        self.assertIn("source_sha256=", cursor_lean)
+        self.assertIn("registry_sha256=", opencode_balanced)
+        self.assertNotEqual(
+            renderer.profile_settings(ROOT, "lean")["escalation"],
+            renderer.profile_settings(ROOT, "balanced")["escalation"],
+        )
+        self.assertEqual(
+            renderer.profile_settings(ROOT, "lean")["strict"],
+            renderer.profile_settings(ROOT, "balanced")["strict"],
+        )
+        with tempfile.TemporaryDirectory() as temp:
+            target = Path(temp) / "adapter.mdc"
+            target.write_text(cursor_lean + "hand edit\n", encoding="utf-8")
+            self.assertTrue(renderer.profile_adapter_drift(target, cursor_lean))
 
     def test_renderer_rejects_absolute_and_escaping_registry_paths(self):
         renderer = self.load_tool("render_policy")

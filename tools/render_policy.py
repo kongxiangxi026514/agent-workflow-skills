@@ -12,6 +12,7 @@ from typing import Mapping
 DEFAULT_ROOT = Path(__file__).resolve().parents[1]
 SOURCE_ROOT = Path("policy-v3/fragments")
 ARTIFACT_ROOT = Path("policy-v3/generated")
+ADAPTER_ROOT = ARTIFACT_ROOT / "adapters"
 
 
 def _canonical_text(path: Path) -> str:
@@ -20,6 +21,40 @@ def _canonical_text(path: Path) -> str:
 
 def _sha256(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def profile_names(root: Path | str = DEFAULT_ROOT) -> tuple[str, ...]:
+    """Return supported installer profiles in deterministic order."""
+    registry = json.loads(_canonical_text(Path(root) / "policy-v3" / "registry.json"))
+    profiles = registry.get("profiles", {})
+    if not profiles:
+        raise ValueError("registry has no installer profiles")
+    return tuple(sorted(profiles))
+
+
+def profile_settings(root: Path | str, profile: str) -> dict:
+    """Return one validated profile plus the invariant strict behavior."""
+    registry = json.loads(_canonical_text(Path(root) / "policy-v3" / "registry.json"))
+    try:
+        settings = registry["profiles"][profile]
+    except KeyError as error:
+        raise ValueError(f"unknown installer profile: {profile}") from error
+    required = {"escalation", "budget"}
+    if set(settings) != required:
+        raise ValueError(f"profile {profile} must contain only escalation and budget")
+    strict = {
+        "risk": "R2",
+        "risk_auto_load": registry["router"]["risk_auto_load"]["R2"],
+    }
+    return {**settings, "strict": strict}
+
+
+def _profile_adapter_path(platform: str, profile: str) -> Path:
+    if platform == "cursor":
+        return ADAPTER_ROOT / platform / profile / "workflow-gate.mdc"
+    if platform == "opencode":
+        return ADAPTER_ROOT / platform / profile / "AGENTS.md"
+    raise ValueError(f"unsupported profile adapter platform: {platform}")
 
 
 def _resolve_contained_path(
@@ -79,6 +114,54 @@ def _render_policy(policy: dict, body: str, registry_hash: str) -> str:
     return f"{provenance}\n\n{body}"
 
 
+def expected_profile_adapter(root: Path | str, platform: str, profile: str) -> str:
+    """Render one platform adapter from the canonical L0 fragment."""
+    root = Path(root)
+    registry_text = _canonical_text(root / "policy-v3" / "registry.json")
+    registry = json.loads(registry_text)
+    settings = profile_settings(root, profile)
+    policy = next(item for item in registry["policies"] if item["policy_id"] == "P00")
+    source, _ = resolve_policy_paths(root, policy)
+    body = _canonical_text(source)
+    profile_json = json.dumps(
+        {"budget": settings["budget"], "escalation": settings["escalation"]},
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    provenance = (
+        f"<!-- GENERATED; policy_id=P00; source={policy['source']}; "
+        f"source_sha256={_sha256(body)}; registry_sha256={_sha256(registry_text)}; "
+        f"platform={platform}; profile={profile}; profile_sha256={_sha256(profile_json)} -->"
+    )
+    profile_line = f"<!-- profile-settings={profile_json} -->"
+    if platform == "cursor":
+        rendered = (
+            "---\n"
+            f"description: Generated policy-v3 L0 router (profile={profile}).\n"
+            "alwaysApply: true\n"
+            "---\n"
+            "<!-- Managed by agent-workflow-skills. -->\n"
+            f"{provenance}\n{profile_line}\n\n{body}"
+        )
+    elif platform == "opencode":
+        rendered = f"{provenance}\n{profile_line}\n\n{body}"
+    else:
+        raise ValueError(f"unsupported profile adapter platform: {platform}")
+    if _token_proxy(rendered) > settings["budget"]["l0_max"]:
+        raise ValueError(f"{platform}/{profile} L0 adapter exceeds its profile budget")
+    return rendered
+
+
+def _token_proxy(text: str) -> int:
+    return (len(text) + 3) // 4
+
+
+def profile_adapter_drift(target: Path, expected: str) -> bool:
+    """Return whether one installed or committed adapter differs from its source render."""
+    return not target.is_file() or target.read_bytes() != expected.encode("utf-8")
+
+
 def expected_outputs(root: Path | str = DEFAULT_ROOT) -> dict[Path, str]:
     """Build every expected generated artifact in registry order."""
     root = Path(root)
@@ -94,6 +177,10 @@ def expected_outputs(root: Path | str = DEFAULT_ROOT) -> dict[Path, str]:
         source, artifact = resolve_policy_paths(root, policy)
         body = _canonical_text(source)
         outputs[artifact.relative_to(root.resolve())] = _render_policy(policy, body, registry_hash)
+    for platform in ("cursor", "opencode"):
+        for profile in profile_names(root):
+            relative = _profile_adapter_path(platform, profile)
+            outputs[relative] = expected_profile_adapter(root, platform, profile)
     return outputs
 
 
