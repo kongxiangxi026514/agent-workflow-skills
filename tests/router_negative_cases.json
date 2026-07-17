@@ -1,0 +1,79 @@
+[
+  {
+    "id": "review-wording",
+    "text": "Review this README sentence for tone.",
+    "paths": ["README.md"],
+    "forbidden_policies": ["P04"],
+    "max_risk": "R0"
+  },
+  {
+    "id": "memory-performance",
+    "text": "Explain the memory usage of this local loop.",
+    "paths": ["src/loop.py"],
+    "forbidden_policies": ["P03"],
+    "max_risk": "R0"
+  },
+  {
+    "id": "local-research-symbol",
+    "text": "Find the local variable named research_result.",
+    "paths": ["src/report.py"],
+    "forbidden_policies": ["P02"],
+    "max_risk": "R0"
+  },
+  {
+    "id": "parallel-lines",
+    "text": "Explain why these two lines are parallel.",
+    "paths": ["docs/math.md"],
+    "forbidden_policies": ["P05"],
+    "max_risk": "R0"
+  },
+  {
+    "id": "first-principles-heading",
+    "text": "Fix a typo in the First Principles heading.",
+    "paths": ["docs/guide.md"],
+    "forbidden_policies": ["P06"],
+    "max_risk": "R0"
+  },
+  {
+    "id": "schema-doc-question",
+    "text": "What does schema mean in this documentation?",
+    "paths": ["docs/glossary.md"],
+    "forbidden_policies": ["P01", "P04"],
+    "max_risk": "R0"
+  },
+  {
+    "id": "security-doc-typo",
+    "text": "Quickly fix the spelling of security in README.",
+    "paths": ["README.md"],
+    "forbidden_policies": ["P01", "P04"],
+    "max_risk": "R0"
+  },
+  {
+    "id": "deployment-doc-typo",
+    "text": "Quickly fix a deployment typo in INSTALL.md.",
+    "paths": ["INSTALL.md"],
+    "forbidden_policies": ["P01", "P04"],
+    "max_risk": "R0"
+  },
+  {
+    "id": "remember-tests",
+    "text": "Remember to run the local tests after the typo fix.",
+    "paths": ["README.md"],
+    "forbidden_policies": ["P03"],
+    "max_risk": "R0"
+  },
+  {
+    "id": "sentence-review",
+    "text": "Review my sentence, not code or a diff.",
+    "paths": [],
+    "forbidden_policies": ["P04"],
+    "max_risk": "R0"
+  },
+  {
+    "id": "split-paragraph",
+    "text": "Split this paragraph into two sections.",
+    "paths": ["docs/guide.md"],
+    "forbidden_policies": ["P05"],
+    "max_risk": "R0"
+  }
+]

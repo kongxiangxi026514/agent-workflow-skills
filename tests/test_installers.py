@@ -1,7 +1,21 @@
 import json, os, shutil, subprocess, tempfile, unittest
 from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
-SKILLS = ("code-review", "first-principles", "memory-gate", "parallel-dispatch", "research-routing")
+SKILLS = (
+    "code-review",
+    "first-principles",
+    "memory-gate",
+    "parallel-dispatch",
+    "research-routing",
+)
+V3_SKILLS = (
+    "code-review",
+    "first-principles",
+    "memory-gate",
+    "parallel-dispatch",
+    "research-routing",
+    "workflow-lifecycle",
+)
 PS = shutil.which("powershell") or shutil.which("pwsh")
 BASH = shutil.which("bash")
 MODELS = ("-BuildModel", "acme/terra", "-ReasonModel", "acme/sol", "-ReviewModel", "other/glm")
@@ -87,9 +101,11 @@ class InstallerTests(unittest.TestCase):
         self.assertEqual(agents.read_text(encoding="utf-8").count("BEGIN agent-workflow-skills spine"), 1)
         self.assertFalse(agents.read_bytes().startswith(b"\xef\xbb\xbf"))
         self.assert_agents()
-        for skill in SKILLS:
-            for root in (self.home / ".cursor/skills", self.opencode / "skills", self.home / ".claude/skills"):
+        for skill in V3_SKILLS:
+            for root in (self.home / ".cursor/skills", self.opencode / "skills"):
                 self.assertTrue((root / skill / "SKILL.md").is_file())
+        for skill in SKILLS:
+            self.assertTrue((self.home / ".claude/skills" / skill / "SKILL.md").is_file())
         self.assertTrue((self.project / ".cursor/rules/workflow-gate.mdc").is_file())
         self.assertTrue((self.project / ".cursor/rules/model-routing.mdc").is_file())
         self.assertFalse(self.binding.read_bytes().startswith(b"\xef\xbb\xbf"))
@@ -104,6 +120,37 @@ class InstallerTests(unittest.TestCase):
         self.assertFalse((self.opencode / "agents/build.md").exists())
         self.assertFalse((self.opencode / "agents/reason.md").exists())
         self.assertFalse(self.binding.exists())
+
+    def test_v3_profile_defaults_are_platform_specific_and_owned(self):
+        self.assertEqual(
+            self.invoke("install.ps1", "all", "-Project", str(self.project), *MODELS).returncode,
+            0,
+        )
+        cursor_rule = self.project / ".cursor/rules/workflow-gate.mdc"
+        opencode_spine = self.opencode / "AGENTS.md"
+        self.assertIn("profile=lean", cursor_rule.read_text(encoding="utf-8"))
+        self.assertIn("profile=balanced", opencode_spine.read_text(encoding="utf-8"))
+        for state_path, expected_profile in (
+            (self.project / ".cursor/agent-workflow-skills/install-state.json", "lean"),
+            (self.opencode / "agent-workflow-skills/install-state.json", "balanced"),
+        ):
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+            self.assertEqual(state["profile"], expected_profile)
+            self.assertIn("workflow-gate.mdc", state["policy_owned_sha256"])
+        skill = self.opencode / "skills/workflow-lifecycle/SKILL.md"
+        self.assertIn("GENERATED; policy_id=P01", skill.read_text(encoding="utf-8"))
+
+    def test_hand_edited_owned_profile_adapter_fails_before_refresh(self):
+        args = ("-Project", str(self.project), *MODELS)
+        self.assertEqual(self.invoke("install.ps1", "cursor", *args).returncode, 0)
+        rule = self.project / ".cursor/rules/workflow-gate.mdc"
+        rule.write_text("manual edit\n", encoding="utf-8")
+        before = rule.read_bytes()
+        result = self.invoke("install.ps1", "cursor", *args)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(b"drift", result.stderr.lower())
+        self.assertEqual(rule.read_bytes(), before)
+
     def test_opencode_models_are_required_before_mutation(self):
         for tool, extra in (("opencode", ()), ("all", ("-Project", str(self.project)))):
             result = self.invoke("install.ps1", tool, *extra)
@@ -184,8 +231,11 @@ class InstallerTests(unittest.TestCase):
         self.assertIn("agents/build.md", state["owned_sha256"])
         self.assertEqual(self.invoke("uninstall.ps1", "opencode", "-OpenCodeConfigDir", str(custom)).returncode, 0)
         self.assertFalse(agent.exists())
-    def test_portable_runtime_policy_contains_roles_not_model_ids(self):
-        files = [ROOT / "rules/workflow-gate.mdc", ROOT / "skills/parallel-dispatch/SKILL.md"]
+    def test_generated_runtime_policy_contains_roles_not_model_ids(self):
+        generated = ROOT / "policy-v3/generated"
+        files = sorted((generated / "adapters").rglob("*")) + sorted((generated / "skills").rglob("SKILL.md"))
+        files = [path for path in files if path.is_file()]
+        self.assertTrue(files)
         text = "\n".join(path.read_text(encoding="utf-8") for path in files)
         for role in ("build", "reason", "review"):
             self.assertIn(role, text)
@@ -229,6 +279,41 @@ run "$repo/install.sh" --tool opencode --opencode-config-dir "$cfgdir"
 grep -q 'model: acme/new' "$cfgdir/agents/build.md"
 run "$repo/uninstall.sh" --tool opencode --opencode-config-dir "$cfgdir"
 test ! -e "$cfgdir/agents/build.md"; test ! -e "$binding"
+''')
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+    def test_empty_bash_profile_is_rejected_before_mutation(self):
+        result = self.run_bash(r'''
+set -euo pipefail
+repo="$1"; root="$(mktemp -d)"; trap 'rm -rf "$root"' EXIT; export HOME="$root/home"
+run() { env -i HOME="$HOME" PATH=/usr/local/bin:/usr/bin:/bin bash "$@"; }
+cfgdir="$root/config"; mkdir -p "$cfgdir"
+if run "$repo/install.sh" --tool opencode --opencode-config-dir "$cfgdir" --profile= --build-model acme/terra --review-model other/glm; then exit 1; fi
+test ! -e "$cfgdir/agents/build.md"; test ! -e "$cfgdir/agent-workflow-skills/install-state.json"
+''')
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+    def test_bash_profiles_default_override_and_owned_spine_drift(self):
+        result = self.run_bash(r'''
+set -euo pipefail
+repo="$1"; root="$(mktemp -d)"; trap 'rm -rf "$root"' EXIT; export HOME="$root/home"
+run() { env -i HOME="$HOME" PATH=/usr/local/bin:/usr/bin:/bin bash "$@"; }
+project="$root/project"; cfgdir="$root/opencode"; mkdir -p "$project" "$cfgdir"
+run "$repo/install.sh" --tool cursor --project "$project" --build-model acme/terra --review-model other/glm
+grep -q 'profile=lean' "$project/.cursor/rules/workflow-gate.mdc"
+run "$repo/install.sh" --tool cursor --project "$project" --profile=balanced
+grep -q 'profile=balanced' "$project/.cursor/rules/workflow-gate.mdc"
+run "$repo/install.sh" --tool opencode --opencode-config-dir "$cfgdir" --build-model acme/terra --review-model other/glm
+agents="$cfgdir/AGENTS.md"; grep -q 'profile=balanced' "$agents"
+run "$repo/install.sh" --tool opencode --opencode-config-dir "$cfgdir" --profile=lean
+grep -q 'profile=lean' "$agents"
+run "$repo/install.sh" --tool opencode --opencode-config-dir "$cfgdir"
+grep -q 'profile=balanced' "$agents"
+cp "$agents" "$root/invalid.before"
+if run "$repo/install.sh" --tool opencode --opencode-config-dir "$cfgdir" --profile=foo; then exit 1; fi
+cmp "$agents" "$root/invalid.before"
+sed -i '/END agent-workflow-skills spine/i tampered generated policy' "$agents"
+cp "$agents" "$root/agents.before"; cp "$cfgdir/agents/build.md" "$root/build.before"
+if run "$repo/install.sh" --tool opencode --opencode-config-dir "$cfgdir" --profile=lean; then exit 1; fi
+cmp "$agents" "$root/agents.before"; cmp "$cfgdir/agents/build.md" "$root/build.before"
 ''')
         self.assertEqual(result.returncode, 0, result.stderr.decode())
     def test_orphan_marker_preserves_content_for_install_and_uninstall(self):

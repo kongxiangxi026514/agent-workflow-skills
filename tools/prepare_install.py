@@ -3,6 +3,7 @@ import hashlib, json, re, shutil, sys
 from pathlib import Path
 
 from validate_jsonc import normalize_jsonc
+from render_policy import detect_drift, expected_outputs, profile_names
 
 ROOT = Path(__file__).resolve().parents[1]
 MODEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*(/[A-Za-z0-9][A-Za-z0-9._-]*)+$")
@@ -53,14 +54,26 @@ def _hash(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def _stage(stage, binding_path, supplied):
+def _adapter_source(platform, profile):
+    if platform not in ("cursor", "opencode"):
+        raise ValueError(f"unsupported install platform: {platform}")
+    if profile not in profile_names(ROOT):
+        raise ValueError(f"unsupported install profile: {profile}")
+    name = "workflow-gate.mdc" if platform == "cursor" else "AGENTS.md"
+    return ROOT / "policy-v3" / "generated" / "adapters" / platform / profile / name
+
+
+def _stage(stage, binding_path, platform, profile, supplied):
     data, models = _binding(binding_path, supplied)
+    drift = detect_drift(ROOT, expected_outputs(ROOT))
+    if drift:
+        raise ValueError(f"generated policy artifacts drifted: {', '.join(drift)}")
     stage.mkdir(parents=True, exist_ok=True)
-    shutil.copytree(ROOT / "skills", stage / "skills")
+    shutil.copytree(ROOT / "policy-v3" / "generated" / "skills", stage / "skills")
     for skill in (stage / "skills").iterdir():
         if skill.is_dir():
             (skill / OWNER).write_text("agent-workflow-skills\n", encoding="utf-8", newline="\n")
-    shutil.copy2(ROOT / "rules/workflow-gate.mdc", stage / "workflow-gate.mdc")
+    shutil.copy2(_adapter_source(platform, profile), stage / "workflow-gate.mdc")
     (stage / "agents").mkdir()
     for name, model in zip(("build", "reason", "review"), models):
         _render(ROOT / f"opencode/agents/{name}.md", stage / f"agents/{name}.md", {"__OPENCODE_MODEL__": model})
@@ -71,13 +84,19 @@ def _stage(stage, binding_path, supplied):
     )
     binding_text = "// Edit role IDs, then rerun the installer.\n" + json.dumps(data, ensure_ascii=False, indent=2) + "\n"
     (stage / "model-routing.jsonc").write_text(binding_text, encoding="utf-8", newline="\n")
-    owned = [stage / "workflow-gate.mdc", stage / "model-routing.mdc", stage / "model-routing.jsonc"]
+    policy_owned = [stage / "workflow-gate.mdc", *(stage / "skills").glob("*/SKILL.md")]
+    owned = [*policy_owned, stage / "model-routing.mdc", stage / "model-routing.jsonc"]
     owned.extend((stage / "agents").glob("*.md"))
     owned.extend((stage / "skills").glob("*/SKILL.md"))
     state = {
         "bundle": "agent-workflow-skills",
-        "version": 1,
+        "version": 2,
+        "platform": platform,
+        "profile": profile,
         "owned_sha256": {str(path.relative_to(stage)).replace("\\", "/"): _hash(path) for path in owned},
+        "policy_owned_sha256": {
+            str(path.relative_to(stage)).replace("\\", "/"): _hash(path) for path in policy_owned
+        },
     }
     (stage / "install-state.json").write_text(json.dumps(state, indent=2) + "\n", encoding="utf-8", newline="\n")
     portable = [stage / "workflow-gate.mdc", *(stage / "skills").glob("*/SKILL.md")]
@@ -91,9 +110,15 @@ def _stage(stage, binding_path, supplied):
 
 def main():
     try:
-        if len(sys.argv) != 6:
-            raise ValueError("usage: prepare_install.py STAGE BINDING BUILD REASON REVIEW")
-        models = _stage(Path(sys.argv[1]), Path(sys.argv[2]), tuple(sys.argv[3:6]))
+        if len(sys.argv) != 8:
+            raise ValueError("usage: prepare_install.py STAGE BINDING PLATFORM PROFILE BUILD REASON REVIEW")
+        models = _stage(
+            Path(sys.argv[1]),
+            Path(sys.argv[2]),
+            sys.argv[3],
+            sys.argv[4],
+            tuple(sys.argv[5:8]),
+        )
         print("\n".join(models))
     except (OSError, UnicodeError, ValueError, json.JSONDecodeError) as error:
         print(f"Invalid model binding or bundle artifact: {error}", file=sys.stderr)

@@ -1,6 +1,6 @@
 # agent-workflow-skills
 
-> 一套可热插拔、跨工具(Cursor / OpenCode / Claude)的 AI 编码 agent 开发 workflow。**5 个按需 skill + 1 个强制常驻脊柱规则**,脚本一键安装,零手动拷贝。
+> 一套可热插拔、跨工具(Cursor / OpenCode / Claude)的 AI 编码 agent 开发 workflow。v3 使用**短 L0 路由 + 按需 policy fragments**，安装器从唯一 `policy-v3/registry.json` 生成产物，零手动拷贝。
 
 ## 简介
 
@@ -28,16 +28,27 @@
 
 安装器先在临时目录渲染/校验,再自动复制全部资产并写 ownership state。文本使用 UTF-8 无 BOM,重复安装/卸载幂等;同名非本包 skill/agent/rule 会在写入前报错。OpenCode 的 `opencode.json` / `opencode.jsonc` **从不读取、修改或创建**:双文件并存或内容损坏都不阻塞安装,原始字节保持不变。
 
+### v3 profile
+
+Cursor 默认安装 `lean`; OpenCode 默认安装 `balanced`。也可用 `-Profile lean|balanced` 或 `--profile lean|balanced` 显式覆盖。profile **只**调整 R0/R1 的升级阈值与 L0/capsule token budget，不复制或改写任何 policy 正文；所有 R2 Strict 触发、加载 `P01,P04` 与独立审查行为完全一致。
+
+生成的 Cursor/OpenCode adapter、按需 skills 和 ownership state 都记录 `policy_id`、fragment hash、registry hash 与 profile。手改已安装生成物或仓库生成物会在下一次刷新前 fail-loud，避免静默覆盖。
+
 Windows / Cursor(把强制脊柱写进某个项目):
 
 ```powershell
 .\install.ps1 -Tool cursor -Project D:\path\to\your-repo -BuildModel provider/build-id -ReviewModel other/review-id
+# 可选：显式覆盖 Cursor 默认 lean
+.\install.ps1 -Tool cursor -Project D:\path\to\your-repo -Profile balanced -BuildModel provider/build-id -ReviewModel other/review-id
 ```
 
 OpenCode(全局 AGENTS.md 自动注入脊柱 + 全局 skills + 三个已绑定模型的 agent):
 
 ```bash
 ./install.sh --tool opencode \
+  --build-model provider/build-id --review-model other/review-id
+# 可选：显式覆盖 OpenCode 默认 balanced
+./install.sh --tool opencode --profile lean \
   --build-model provider/build-id --review-model other/review-id
 ```
 
@@ -88,6 +99,13 @@ export AGENT_WORKFLOW_OPENCODE_BUILD_MODEL=provider/build-id AGENT_WORKFLOW_OPEN
 ./uninstall.sh --tool opencode
 ./uninstall.sh --tool all --project /path/to/your-repo
 ```
+
+## 从 installer-v2 安全迁移
+
+1. 不要手动复制 `AGENTS.md`、rules 或 skills；保留现有 machine-local `model-routing.jsonc`。
+2. 在仓库更新到包含 `policy-v3/generated/` 的版本后，直接重跑对应安装命令。已有 bundle-owned v2 资产会由 staging 后的 v3 生成物原子替换；`opencode.json` / `opencode.jsonc` 仍零修改。
+3. Cursor 默认得到 `lean`，OpenCode 默认得到 `balanced`；如需统一策略，显式传 `Profile`。随后重启 OpenCode。
+4. 若提示 generated policy drift，先检查是否手改了受管 adapter/skill；不保留该手改时，运行对应 `uninstall` 后再重装。不要删除 ownership state 或 marker 来绕过检查。
 
 ## 验证已生效
 

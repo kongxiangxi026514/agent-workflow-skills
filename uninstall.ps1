@@ -65,7 +65,7 @@ function Test-SpineMarkerIntegrity([string]$File) {
 function Remove-Skills([string]$DestSkillsDir) {
     # Only remove the skill folders that this bundle ships (never a whole skills dir).
     if (-not (Test-Path $DestSkillsDir)) { return }
-    Get-ChildItem -Directory -LiteralPath (Join-Path $RepoRoot 'skills') | ForEach-Object {
+    Get-ChildItem -Directory -LiteralPath (Join-Path $RepoRoot 'policy-v3\generated\skills') | ForEach-Object {
         $dest = Join-Path $DestSkillsDir $_.Name
         if ((Test-Path $dest) -and (Test-Path (Join-Path $dest $SkillMarker))) {
             Remove-Item -Recurse -Force -LiteralPath $dest
