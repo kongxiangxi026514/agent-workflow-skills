@@ -210,14 +210,32 @@ def write_outputs(root: Path | str, expected: Mapping[Path, str]) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, default=DEFAULT_ROOT)
+    parser.add_argument(
+        "--project-root",
+        type=Path,
+        help="Render one provenance-pinned project extension instead of portable artifacts.",
+    )
     parser.add_argument("--check", action="store_true", help="Fail when committed artifacts drift.")
     parser.add_argument("--json", action="store_true", help="Print a machine-readable summary.")
     args = parser.parse_args()
-    expected = expected_outputs(args.root)
-    drift = detect_drift(args.root, expected)
-    if not args.check:
-        write_outputs(args.root, expected)
-        drift = []
+    if args.project_root:
+        from render_project_extension import (
+            detect_extension_drift,
+            expected_extension_outputs,
+            write_extension_outputs,
+        )
+
+        expected = expected_extension_outputs(args.root, args.project_root)
+        drift = detect_extension_drift(args.project_root, expected)
+        if not args.check:
+            write_extension_outputs(args.project_root, expected)
+            drift = []
+    else:
+        expected = expected_outputs(args.root)
+        drift = detect_drift(args.root, expected)
+        if not args.check:
+            write_outputs(args.root, expected)
+            drift = []
     report = {"artifacts": len(expected), "drift": drift}
     print(json.dumps(report, sort_keys=True) if args.json else report)
     return 1 if drift else 0
