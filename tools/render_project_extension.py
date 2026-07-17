@@ -27,6 +27,7 @@ REQUIRED_FIELDS = {
     "artifact",
     "on_demand",
 }
+ROUTE_FIELDS = {"route_id", "base_policy_id", "description", "source", "artifact", "budget_tokens"}
 
 
 def _canonical_text(path: Path) -> str:
@@ -109,6 +110,31 @@ def _validate_policy(project_root: Path, policy: dict, errors: list[str]) -> Non
             errors.append(f"{policy_id}: invalid cursor glob {glob!r}")
 
 
+def _validate_route(project_root: Path, route: dict, errors: list[str]) -> None:
+    """Validate one base-policy route that carries project-only operating rules."""
+    route_id = route.get("route_id", "?")
+    missing = ROUTE_FIELDS - route.keys()
+    if missing:
+        errors.append(f"{route_id}: missing route fields {sorted(missing)}")
+        return
+    if route["base_policy_id"] not in {"P01", "P02", "P03", "P04", "P05"}:
+        errors.append(f"{route_id}: base_policy_id must be P01 through P05")
+    try:
+        source = _contained(project_root, route["source"], POLICY_ROOT)
+        artifact = _contained(project_root, route["artifact"], GENERATED_ROOT)
+    except ValueError as error:
+        errors.append(f"{route_id}: {error}")
+        return
+    if not source.is_file():
+        errors.append(f"{route_id}: missing route source {route['source']}")
+    if artifact.name != "SKILL.md":
+        errors.append(f"{route_id}: route artifact must be a SKILL.md file")
+    if not isinstance(route["budget_tokens"], int) or not 0 < route["budget_tokens"] <= 3000:
+        errors.append(f"{route_id}: budget_tokens must be in 1..3000")
+    if source.is_file() and _token_proxy(_canonical_text(source)) > route["budget_tokens"]:
+        errors.append(f"{route_id}: route source exceeds budget")
+
+
 def validate_extension(portable_root: Path | str, project_root: Path | str) -> dict:
     """Return extension pin, schema, source, budget, and selector validation errors."""
     portable_root = Path(portable_root)
@@ -134,6 +160,12 @@ def validate_extension(portable_root: Path | str, project_root: Path | str) -> d
         source = project_root / policy.get("source", "")
         if source.is_file() and _token_proxy(_canonical_text(source)) > policy.get("budget_tokens", 0):
             errors.append(f"{policy.get('policy_id', '?')}: source exceeds budget")
+    routes = overlay.get("routes", [])
+    route_ids = [route.get("route_id") for route in routes]
+    if len(route_ids) != len(set(route_ids)):
+        errors.append("duplicate project route_id")
+    for route in routes:
+        _validate_route(project_root, route, errors)
     return {"errors": errors, "registry_sha256": registry_sha256}
 
 
@@ -191,7 +223,24 @@ def _render_router(overlay: dict, base_hash: str, extension_hash: str) -> str:
     ]
     for policy in sorted(overlay["policies"], key=lambda item: item["policy_id"]):
         lines.append(f"- {policy['policy_id']}: `{policy['source']}`")
+    for route in sorted(overlay.get("routes", []), key=lambda item: item["route_id"]):
+        lines.append(f"- {route['base_policy_id']} route `{route['route_id']}`: `{route['source']}`")
     return "\n".join(lines) + "\n"
+
+
+def _render_route(route: dict, body: str, base_hash: str, extension_hash: str) -> str:
+    provenance = (
+        f"<!-- GENERATED; route_id={route['route_id']}; base_policy_id={route['base_policy_id']}; "
+        f"source={route['source']}; source_sha256={_sha256(body)}; "
+        f"base_registry_sha256={base_hash}; project_extension_sha256={extension_hash} -->"
+    )
+    frontmatter = (
+        "---\n"
+        f"name: project-{route['route_id']}\n"
+        f"description: {json.dumps(route['description'], ensure_ascii=False)}\n"
+        "---\n"
+    )
+    return f"{frontmatter}{provenance}\n\n{body}"
 
 
 def _render_manifest(overlay: dict, base_hash: str, extension_hash: str, project_root: Path) -> str:
@@ -212,6 +261,16 @@ def _render_manifest(overlay: dict, base_hash: str, extension_hash: str, project
         "base_registry_sha256": base_hash,
         "project_extension_sha256": extension_hash,
         "policies": policies,
+        "routes": [
+            {
+                "artifact": route["artifact"],
+                "base_policy_id": route["base_policy_id"],
+                "route_id": route["route_id"],
+                "source": route["source"],
+                "source_sha256": _sha256(_canonical_text(project_root / route["source"])),
+            }
+            for route in sorted(overlay.get("routes", []), key=lambda item: item["route_id"])
+        ],
         "schema_version": "1.0",
     }
     return json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
@@ -237,6 +296,17 @@ def expected_extension_outputs(portable_root: Path | str, project_root: Path | s
         )
         for policy in overlay["policies"]
     }
+    outputs.update(
+        {
+            Path(route["artifact"]): _render_route(
+                route,
+                _canonical_text(project_root / route["source"]),
+                base_hash,
+                extension_hash,
+            )
+            for route in overlay.get("routes", [])
+        }
+    )
     outputs[GENERATED_ROOT / "cursor/project-extension-router.mdc"] = _render_router(
         overlay, base_hash, extension_hash
     )

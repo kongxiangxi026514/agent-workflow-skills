@@ -39,6 +39,9 @@ def _policy(policy_id: str, source: str, artifact: str, selector: str, trigger: 
 def _write_extension(project_root: Path, registry_sha256: str) -> None:
     policy_root = project_root / "workflow-policy"
     policy_root.mkdir()
+    adapter_root = policy_root / "adapters"
+    adapter_root.mkdir()
+    (adapter_root / "context7.md").write_text("# Context7 Adapter\n\nProject route.\n", encoding="utf-8")
     policies = []
     for index in range(20, 26):
         policy_id = f"P{index}"
@@ -58,6 +61,16 @@ def _write_extension(project_root: Path, registry_sha256: str) -> None:
             "policy_ids": [f"P0{index}" for index in range(8)],
         },
         "policies": policies,
+        "routes": [
+            {
+                "route_id": "context7",
+                "base_policy_id": "P02",
+                "description": "Project-specific Context7 operating contract.",
+                "source": "workflow-policy/adapters/context7.md",
+                "artifact": "workflow-policy/generated/skills/project-context7/SKILL.md",
+                "budget_tokens": 500,
+            }
+        ],
     }
     (policy_root / "overlay.json").write_text(json.dumps(overlay), encoding="utf-8")
 
@@ -102,6 +115,10 @@ class ProjectExtensionRendererTests(unittest.TestCase):
             self.assertIn(Path("workflow-policy/generated/cursor/project-extension-router.mdc"), expected)
             self.assertIn(Path("workflow-policy/generated/cursor/P20.mdc"), expected)
             self.assertIn(Path("workflow-policy/generated/index/P25.md"), expected)
+            self.assertIn(
+                Path("workflow-policy/generated/skills/project-context7/SKILL.md"),
+                expected,
+            )
             self.assertIn(Path("workflow-policy/generated/manifest.json"), expected)
             self.assertEqual(renderer.detect_extension_drift(project_root, expected), sorted(
                 path.as_posix() for path in expected
@@ -113,6 +130,10 @@ class ProjectExtensionRendererTests(unittest.TestCase):
             self.assertIn("project_extension_sha256=", rendered)
             self.assertIn("base_registry_sha256=", rendered)
             self.assertIn("globs:", rendered)
+            route = (
+                project_root / "workflow-policy/generated/skills/project-context7/SKILL.md"
+            ).read_text(encoding="utf-8")
+            self.assertIn("base_policy_id=P02", route)
 
     def test_extension_rejects_wrong_portable_registry_fingerprint(self):
         renderer = self.load_tool()
@@ -147,7 +168,7 @@ class ProjectExtensionRendererTests(unittest.TestCase):
             )
 
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn('"artifacts": 8', result.stdout)
+        self.assertIn('"artifacts": 9', result.stdout)
 
 
 if __name__ == "__main__":
