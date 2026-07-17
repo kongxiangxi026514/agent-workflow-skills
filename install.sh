@@ -52,8 +52,12 @@ OPENCODE_CONFIG=""
 AGENT_MARKER='<!-- Managed by agent-workflow-skills. -->'
 SKILL_MARKER='.agent-workflow-skills-owned'
 OPENCODE_BASE="${OPENCODE_CONFIG_DIR:-$HOME/.config/opencode}"
-OPENCODE_STAGE=""; CURSOR_STAGE=""
-cleanup() { [ -z "$OPENCODE_STAGE" ] || rm -rf "$OPENCODE_STAGE"; [ -z "$CURSOR_STAGE" ] || rm -rf "$CURSOR_STAGE"; }
+OPENCODE_STAGE=""; CURSOR_STAGE=""; CLAUDE_STAGE=""
+cleanup() {
+  [ -z "$OPENCODE_STAGE" ] || rm -rf "$OPENCODE_STAGE"
+  [ -z "$CURSOR_STAGE" ] || rm -rf "$CURSOR_STAGE"
+  [ -z "$CLAUDE_STAGE" ] || rm -rf "$CLAUDE_STAGE"
+}
 trap cleanup EXIT
 
 resolve_python() {
@@ -214,10 +218,13 @@ install_opencode() {
 
 install_claude() {
   base="$HOME/.claude"
-  copy_skills "$base/skills"
+  copy_skills "$base/skills" "$CLAUDE_STAGE/skills"
   SUMMARY+=("claude: skills -> $base/skills")
-  set_spine_block "$base/CLAUDE.md" "$REPO_ROOT/rules/workflow-gate.mdc"
-  SUMMARY+=("claude: spine injected -> $base/CLAUDE.md (marker block)")
+  set_spine_block "$base/CLAUDE.md" "$CLAUDE_STAGE/workflow-gate.mdc"
+  mkdir -p "$base/agent-workflow-skills"
+  cp -f "$CLAUDE_STAGE/install-state.json" "$base/agent-workflow-skills/"
+  SUMMARY+=("claude: generated v3 spine -> $base/CLAUDE.md (marker block)")
+  SUMMARY+=("claude: ownership state -> $base/agent-workflow-skills/install-state.json")
 }
 
 if { [ "$TOOL" = cursor ] || [ "$TOOL" = all ]; } && [ -z "$PROJECT" ]; then
@@ -244,7 +251,13 @@ if [ "$TOOL" = cursor ] || [ "$TOOL" = all ]; then
   done
   CURSOR_STAGE="$(new_install_stage "$binding" cursor "$(profile_for cursor)")"
 fi
-if [ "$TOOL" = claude ] || [ "$TOOL" = all ]; then assert_spine_markers "$HOME/.claude/CLAUDE.md"; fi
+if [ "$TOOL" = claude ] || [ "$TOOL" = all ]; then
+  CLAUDE_BASE="$HOME/.claude"
+  assert_spine_markers "$CLAUDE_BASE/CLAUDE.md"
+  preflight_skills "$CLAUDE_BASE/skills"
+  verify_policy_ownership "$CLAUDE_BASE/agent-workflow-skills/install-state.json" "$CLAUDE_BASE/CLAUDE.md" "$CLAUDE_BASE/skills" 1
+  CLAUDE_STAGE="$(new_install_stage "$CLAUDE_BASE/agent-workflow-skills/model-routing.jsonc" claude "$(profile_for claude)")"
+fi
 
 case "$TOOL" in
   cursor)   install_cursor ;;

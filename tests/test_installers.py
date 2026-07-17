@@ -104,7 +104,7 @@ class InstallerTests(unittest.TestCase):
         for skill in V3_SKILLS:
             for root in (self.home / ".cursor/skills", self.opencode / "skills"):
                 self.assertTrue((root / skill / "SKILL.md").is_file())
-        for skill in SKILLS:
+        for skill in V3_SKILLS:
             self.assertTrue((self.home / ".claude/skills" / skill / "SKILL.md").is_file())
         self.assertTrue((self.project / ".cursor/rules/workflow-gate.mdc").is_file())
         self.assertTrue((self.project / ".cursor/rules/model-routing.mdc").is_file())
@@ -139,6 +139,35 @@ class InstallerTests(unittest.TestCase):
             self.assertIn("workflow-gate.mdc", state["policy_owned_sha256"])
         skill = self.opencode / "skills/workflow-lifecycle/SKILL.md"
         self.assertIn("GENERATED; policy_id=P01", skill.read_text(encoding="utf-8"))
+
+    def test_claude_installs_generated_v3_policy_and_blocks_drift(self):
+        self.assertEqual(self.invoke("install.ps1", "claude").returncode, 0)
+        claude = self.home / ".claude"
+        adapter = ROOT / "policy-v3/generated/adapters/claude/balanced/CLAUDE.md"
+        spine = (claude / "CLAUDE.md").read_text(encoding="utf-8")
+        self.assertIn(adapter.read_text(encoding="utf-8"), spine)
+        self.assertIn("profile=balanced", spine)
+        state = json.loads((claude / "agent-workflow-skills/install-state.json").read_text(encoding="utf-8"))
+        self.assertEqual(state["platform"], "claude")
+        self.assertEqual(state["profile"], "balanced")
+        self.assertIn("workflow-gate.mdc", state["policy_owned_sha256"])
+        for skill in V3_SKILLS:
+            self.assertTrue((claude / "skills" / skill / "SKILL.md").is_file())
+        skill = claude / "skills/workflow-lifecycle/SKILL.md"
+        skill.write_text("manual edit\n", encoding="utf-8")
+        result = self.invoke("install.ps1", "claude")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(b"drift", result.stderr.lower())
+        self.assertEqual(skill.read_text(encoding="utf-8"), "manual edit\n")
+
+    def test_claude_refuses_unowned_v3_skill_before_mutation(self):
+        skill = self.home / ".claude/skills/code-review/SKILL.md"
+        skill.parent.mkdir(parents=True)
+        skill.write_text("user-owned\n", encoding="utf-8")
+        result = self.invoke("install.ps1", "claude")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(skill.read_text(encoding="utf-8"), "user-owned\n")
+        self.assertFalse((self.home / ".claude/CLAUDE.md").exists())
 
     def test_hand_edited_owned_profile_adapter_fails_before_refresh(self):
         args = ("-Project", str(self.project), *MODELS)
@@ -314,6 +343,22 @@ sed -i '/END agent-workflow-skills spine/i tampered generated policy' "$agents"
 cp "$agents" "$root/agents.before"; cp "$cfgdir/agents/build.md" "$root/build.before"
 if run "$repo/install.sh" --tool opencode --opencode-config-dir "$cfgdir" --profile=lean; then exit 1; fi
 cmp "$agents" "$root/agents.before"; cmp "$cfgdir/agents/build.md" "$root/build.before"
+''')
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+
+    def test_bash_claude_uses_generated_v3_adapter_and_drift_guard(self):
+        result = self.run_bash(r'''
+set -euo pipefail
+repo="$1"; root="$(mktemp -d)"; trap 'rm -rf "$root"' EXIT; export HOME="$root/home"
+run() { env -i HOME="$HOME" PATH=/usr/local/bin:/usr/bin:/bin bash "$@"; }
+run "$repo/install.sh" --tool claude
+claude="$HOME/.claude"; grep -q 'policy_id=P00' "$claude/CLAUDE.md"
+grep -q 'profile=balanced' "$claude/CLAUDE.md"; test -f "$claude/skills/workflow-lifecycle/SKILL.md"
+test -f "$claude/agent-workflow-skills/install-state.json"
+printf 'manual edit\n' > "$claude/skills/workflow-lifecycle/SKILL.md"
+cp "$claude/skills/workflow-lifecycle/SKILL.md" "$root/before"
+if run "$repo/install.sh" --tool claude; then exit 1; fi
+cmp "$claude/skills/workflow-lifecycle/SKILL.md" "$root/before"
 ''')
         self.assertEqual(result.returncode, 0, result.stderr.decode())
     def test_orphan_marker_preserves_content_for_install_and_uninstall(self):

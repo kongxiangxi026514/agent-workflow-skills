@@ -133,11 +133,14 @@ function Uninstall-OpenCode {
 
 function Uninstall-Claude {
     $base = Join-Path $env:USERPROFILE '.claude'
+    $state = Join-Path $base 'agent-workflow-skills\install-state.json'
     Remove-Skills (Join-Path $base 'skills')
     $summary.Add("claude: removed bundle skills from $base\skills")
     $claudeMd = Join-Path $base 'CLAUDE.md'
     Remove-SpineBlock $claudeMd
     $summary.Add("claude: removed spine marker block from $claudeMd")
+    if (Test-Path $state) { Remove-Item -Force $state }
+    $summary.Add("claude: removed bundle ownership state when present")
 }
 
 if ($Tool -eq 'opencode' -or $Tool -eq 'all') {
