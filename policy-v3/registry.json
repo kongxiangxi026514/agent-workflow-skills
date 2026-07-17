@@ -40,7 +40,8 @@
     "strict_override_patterns": [
       "\\bstrict tdd\\b",
       "\\bfull process\\b",
-      "\\bfull sop\\b"
+      "\\bfull sop\\b",
+      "(?:\\bgrill(?:-me)?\\b|/grilling\\b)"
     ],
     "change_patterns": [
       "\\badd\\b",

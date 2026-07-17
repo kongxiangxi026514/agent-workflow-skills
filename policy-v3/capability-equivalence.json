@@ -1,0 +1,90 @@
+{
+  "schema_version": "1.0",
+  "purpose": "Executable gate for retained Superpowers, grill-me, and Trellis-inspired capabilities before global disable.",
+  "explicitly_excluded": [
+    "verbose-repeated-prompts",
+    "mandatory-per-turn-announcements",
+    "unconditional-full-lifecycle"
+  ],
+  "capabilities": [
+    {
+      "id": "formal-r2-design-approval",
+      "superpowers_source": "brainstorming + writing-plans",
+      "v3_evidence": {
+        "policy_id": "P01",
+        "source": "policy-v3/fragments/workflow-lifecycle.md",
+        "required_markers": ["R2 formal design gate", "explicit user approval", "Chinese-primary"]
+      }
+    },
+    {
+      "id": "task-ledger-checkpoint-handoff",
+      "superpowers_source": "Trellis-inspired task continuity",
+      "v3_evidence": {
+        "policy_id": "P01",
+        "source": "policy-v3/fragments/workflow-lifecycle.md",
+        "required_markers": ["Task ledger", "Checkpoint", "Handoff"]
+      }
+    },
+    {
+      "id": "worktree-branch-lifecycle",
+      "superpowers_source": "using-git-worktrees + finishing-a-development-branch",
+      "v3_evidence": {
+        "policy_id": "P01",
+        "source": "policy-v3/fragments/workflow-lifecycle.md",
+        "required_markers": ["Worktree and branch lifecycle", "base revision", "rollback"]
+      }
+    },
+    {
+      "id": "review-feedback-triage",
+      "superpowers_source": "receiving-code-review + requesting-code-review",
+      "v3_evidence": {
+        "policy_id": "P04",
+        "source": "policy-v3/fragments/code-review.md",
+        "required_markers": ["Review-feedback triage", "classify", "re-review"]
+      }
+    },
+    {
+      "id": "grill-gate",
+      "superpowers_source": "grill-me",
+      "v3_evidence": {
+        "policy_id": "P01",
+        "source": "policy-v3/fragments/workflow-lifecycle.md",
+        "required_markers": ["Grill gate", "/grilling", "alternatives"]
+      }
+    },
+    {
+      "id": "test-first-development",
+      "superpowers_source": "test-driven-development",
+      "v3_evidence": {
+        "policy_id": "P01",
+        "source": "policy-v3/fragments/workflow-lifecycle.md",
+        "required_markers": ["TDD", "failing test"]
+      }
+    },
+    {
+      "id": "verification-and-closeout",
+      "superpowers_source": "verification-before-completion",
+      "v3_evidence": {
+        "policy_id": "P01",
+        "source": "policy-v3/fragments/workflow-lifecycle.md",
+        "required_markers": ["Accept", "Close"]
+      }
+    }
+  ],
+  "golden_cases": [
+    {
+      "id": "formal-r2-design-request",
+      "text": "Use the full process to change this data contract.",
+      "paths": ["src/contracts.py"],
+      "expected_risk": "R2",
+      "expected_policies": ["P01", "P04"]
+    },
+    {
+      "id": "grilling-alias-request",
+      "text": "/grilling design a safe rollout for this small helper.",
+      "paths": ["src/helper.py"],
+      "expected_risk": "R2",
+      "expected_policies": ["P01", "P04"]
+    }
+  ]
+}
