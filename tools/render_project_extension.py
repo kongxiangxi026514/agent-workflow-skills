@@ -135,13 +135,27 @@ def _validate_route(project_root: Path, route: dict, errors: list[str]) -> None:
         errors.append(f"{route_id}: route source exceeds budget")
 
 
+def _duplicate_identity_errors(overlay: dict) -> list[str]:
+    """Return identity collisions before routing or rendering can compress entries."""
+    policies = overlay.get("policies", [])
+    routes = overlay.get("routes", [])
+    policy_ids = [policy.get("policy_id") for policy in policies]
+    route_ids = [route.get("route_id") for route in routes]
+    errors = []
+    if len(policy_ids) != len(set(policy_ids)):
+        errors.append("duplicate project policy_id")
+    if len(route_ids) != len(set(route_ids)):
+        errors.append("duplicate project route_id")
+    return errors
+
+
 def validate_extension(portable_root: Path | str, project_root: Path | str) -> dict:
     """Return extension pin, schema, source, budget, and selector validation errors."""
     portable_root = Path(portable_root)
     project_root = Path(project_root)
     overlay = load_extension(project_root)
     registry, registry_sha256 = _portable_registry(portable_root)
-    errors: list[str] = []
+    errors = _duplicate_identity_errors(overlay)
     if overlay.get("schema_version") != registry.get("schema_version"):
         errors.append("schema_version must match the portable registry")
     base = overlay.get("base_registry", {})
@@ -152,18 +166,12 @@ def validate_extension(portable_root: Path | str, project_root: Path | str) -> d
     if base.get("registry_sha256") != registry_sha256:
         errors.append("base_registry registry_sha256 does not match portable registry")
     policies = overlay.get("policies", [])
-    ids = [policy.get("policy_id") for policy in policies]
-    if len(ids) != len(set(ids)):
-        errors.append("duplicate project policy_id")
     for policy in policies:
         _validate_policy(project_root, policy, errors)
         source = project_root / policy.get("source", "")
         if source.is_file() and _token_proxy(_canonical_text(source)) > policy.get("budget_tokens", 0):
             errors.append(f"{policy.get('policy_id', '?')}: source exceeds budget")
     routes = overlay.get("routes", [])
-    route_ids = [route.get("route_id") for route in routes]
-    if len(route_ids) != len(set(route_ids)):
-        errors.append("duplicate project route_id")
     for route in routes:
         _validate_route(project_root, route, errors)
     return {"errors": errors, "registry_sha256": registry_sha256}
@@ -175,6 +183,9 @@ def _matches(patterns: Iterable[str], value: str) -> bool:
 
 def select_extension_policy_ids(overlay: dict, task: str, paths: Sequence[str]) -> list[str]:
     """Select extension policies deterministically from task and normalized paths."""
+    identity_errors = _duplicate_identity_errors(overlay)
+    if identity_errors:
+        raise ValueError("; ".join(identity_errors))
     normalized_paths = [path.replace("\\", "/") for path in paths]
     selected = []
     for policy in overlay.get("policies", []):

@@ -167,6 +167,33 @@ class ProjectExtensionRendererTests(unittest.TestCase):
                     ["P20"],
                 )
 
+    def test_selector_rejects_duplicate_policy_and_route_ids_before_selection(self):
+        renderer = self.load_tool()
+        registry_sha256 = hashlib.sha256(
+            _canonical_text(ROOT / "policy-v3" / "registry.json").encode("utf-8")
+        ).hexdigest()
+        with tempfile.TemporaryDirectory() as temp:
+            project_root = Path(temp)
+            _write_extension(project_root, registry_sha256)
+            overlay = renderer.load_extension(project_root)
+            duplicated_policy = json.loads(json.dumps(overlay))
+            duplicated_policy["policies"].append(duplicated_policy["policies"][0])
+            duplicated_route = json.loads(json.dumps(overlay))
+            duplicated_route["routes"].append(duplicated_route["routes"][0])
+
+            with self.assertRaisesRegex(ValueError, "duplicate project policy_id"):
+                renderer.select_extension_policy_ids(
+                    duplicated_policy,
+                    "Implement a helper.",
+                    ["src/p20/example.py"],
+                )
+            with self.assertRaisesRegex(ValueError, "duplicate project route_id"):
+                renderer.select_extension_policy_ids(
+                    duplicated_route,
+                    "Implement a helper.",
+                    ["src/p20/example.py"],
+                )
+
     def test_manifest_hashes_each_generated_artifact_and_router_pins_manifest(self):
         renderer = self.load_tool()
         registry_sha256 = hashlib.sha256(
