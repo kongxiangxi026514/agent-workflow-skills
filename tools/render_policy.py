@@ -54,6 +54,8 @@ def _profile_adapter_path(platform: str, profile: str) -> Path:
         return ADAPTER_ROOT / platform / profile / "workflow-gate.mdc"
     if platform == "opencode":
         return ADAPTER_ROOT / platform / profile / "AGENTS.md"
+    if platform == "claude":
+        return ADAPTER_ROOT / platform / profile / "CLAUDE.md"
     raise ValueError(f"unsupported profile adapter platform: {platform}")
 
 
@@ -144,7 +146,7 @@ def expected_profile_adapter(root: Path | str, platform: str, profile: str) -> s
             "<!-- Managed by agent-workflow-skills. -->\n"
             f"{provenance}\n{profile_line}\n\n{body}"
         )
-    elif platform == "opencode":
+    elif platform in ("claude", "opencode"):
         rendered = f"{provenance}\n{profile_line}\n\n{body}"
     else:
         raise ValueError(f"unsupported profile adapter platform: {platform}")
@@ -177,7 +179,7 @@ def expected_outputs(root: Path | str = DEFAULT_ROOT) -> dict[Path, str]:
         source, artifact = resolve_policy_paths(root, policy)
         body = _canonical_text(source)
         outputs[artifact.relative_to(root.resolve())] = _render_policy(policy, body, registry_hash)
-    for platform in ("cursor", "opencode"):
+    for platform in ("cursor", "opencode", "claude"):
         for profile in profile_names(root):
             relative = _profile_adapter_path(platform, profile)
             outputs[relative] = expected_profile_adapter(root, platform, profile)

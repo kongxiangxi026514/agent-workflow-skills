@@ -55,16 +55,23 @@ def _hash(path):
 
 
 def _adapter_source(platform, profile):
-    if platform not in ("cursor", "opencode"):
+    if platform not in ("claude", "cursor", "opencode"):
         raise ValueError(f"unsupported install platform: {platform}")
     if profile not in profile_names(ROOT):
         raise ValueError(f"unsupported install profile: {profile}")
-    name = "workflow-gate.mdc" if platform == "cursor" else "AGENTS.md"
+    name = {
+        "claude": "CLAUDE.md",
+        "cursor": "workflow-gate.mdc",
+        "opencode": "AGENTS.md",
+    }[platform]
     return ROOT / "policy-v3" / "generated" / "adapters" / platform / profile / name
 
 
 def _stage(stage, binding_path, platform, profile, supplied):
-    data, models = _binding(binding_path, supplied)
+    if platform == "claude":
+        data, models = None, ()
+    else:
+        data, models = _binding(binding_path, supplied)
     drift = detect_drift(ROOT, expected_outputs(ROOT))
     if drift:
         raise ValueError(f"generated policy artifacts drifted: {', '.join(drift)}")
@@ -74,19 +81,22 @@ def _stage(stage, binding_path, platform, profile, supplied):
         if skill.is_dir():
             (skill / OWNER).write_text("agent-workflow-skills\n", encoding="utf-8", newline="\n")
     shutil.copy2(_adapter_source(platform, profile), stage / "workflow-gate.mdc")
-    (stage / "agents").mkdir()
-    for name, model in zip(("build", "reason", "review"), models):
-        _render(ROOT / f"opencode/agents/{name}.md", stage / f"agents/{name}.md", {"__OPENCODE_MODEL__": model})
-    _render(
-        ROOT / "cursor/model-routing.mdc",
-        stage / "model-routing.mdc",
-        {"__BUILD_MODEL__": models[0], "__REASON_MODEL__": models[1], "__REVIEW_MODEL__": models[2]},
-    )
-    binding_text = "// Edit role IDs, then rerun the installer.\n" + json.dumps(data, ensure_ascii=False, indent=2) + "\n"
-    (stage / "model-routing.jsonc").write_text(binding_text, encoding="utf-8", newline="\n")
+    if platform != "claude":
+        (stage / "agents").mkdir()
+        for name, model in zip(("build", "reason", "review"), models):
+            _render(ROOT / f"opencode/agents/{name}.md", stage / f"agents/{name}.md", {"__OPENCODE_MODEL__": model})
+        _render(
+            ROOT / "cursor/model-routing.mdc",
+            stage / "model-routing.mdc",
+            {"__BUILD_MODEL__": models[0], "__REASON_MODEL__": models[1], "__REVIEW_MODEL__": models[2]},
+        )
+        binding_text = "// Edit role IDs, then rerun the installer.\n" + json.dumps(data, ensure_ascii=False, indent=2) + "\n"
+        (stage / "model-routing.jsonc").write_text(binding_text, encoding="utf-8", newline="\n")
     policy_owned = [stage / "workflow-gate.mdc", *(stage / "skills").glob("*/SKILL.md")]
-    owned = [*policy_owned, stage / "model-routing.mdc", stage / "model-routing.jsonc"]
-    owned.extend((stage / "agents").glob("*.md"))
+    owned = [*policy_owned]
+    if platform != "claude":
+        owned.extend((stage / "agents").glob("*.md"))
+        owned.extend((stage / "model-routing.mdc", stage / "model-routing.jsonc"))
     owned.extend((stage / "skills").glob("*/SKILL.md"))
     state = {
         "bundle": "agent-workflow-skills",
@@ -103,7 +113,7 @@ def _stage(stage, binding_path, platform, profile, supplied):
     text = "\n".join(path.read_text(encoding="utf-8").lower() for path in portable)
     if any(token in text for token in FORBIDDEN):
         raise ValueError("portable runtime policy contains a concrete machine model identifier")
-    if "edit: deny" not in (stage / "agents/review.md").read_text(encoding="utf-8"):
+    if platform != "claude" and "edit: deny" not in (stage / "agents/review.md").read_text(encoding="utf-8"):
         raise ValueError("review agent must deny edits")
     return models
 

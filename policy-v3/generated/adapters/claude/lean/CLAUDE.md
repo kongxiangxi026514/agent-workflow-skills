@@ -1,5 +1,5 @@
-<!-- GENERATED; policy_id=P00; source=policy-v3/fragments/l0-router.md; source_sha256=b2d3d8a380fa01bb1981391f3dbb9be7d0626729e4061045169de760bfdebfc4; registry_sha256=a0f339fcdd0ef7577e2f20f614ca1a2c3408ca5591f3bd3690710a9b3963e1a9; platform=opencode; profile=balanced; profile_sha256=80153536c6decb00bbbef4697f213edfe17455d150d5452c7b127eefc31bb94f -->
-<!-- profile-settings={"budget":{"capsule_max":800,"l0_max":1500},"escalation":{"ordinary_change_min_paths":0,"ordinary_path_count":2}} -->
+<!-- GENERATED; policy_id=P00; source=policy-v3/fragments/l0-router.md; source_sha256=b2d3d8a380fa01bb1981391f3dbb9be7d0626729e4061045169de760bfdebfc4; registry_sha256=a0f339fcdd0ef7577e2f20f614ca1a2c3408ca5591f3bd3690710a9b3963e1a9; platform=claude; profile=lean; profile_sha256=4daee70a12c80d742bdd80a4fda99ba70077025c9d3bd9a4c061d2b9be4291e2 -->
+<!-- profile-settings={"budget":{"capsule_max":600,"l0_max":1100},"escalation":{"ordinary_change_min_paths":2,"ordinary_path_count":3}} -->
 
 # Workflow Risk Router
 

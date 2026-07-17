@@ -4,7 +4,7 @@
 
 ## Profile 行为
 
-- Cursor 默认 `lean`，OpenCode 默认 `balanced`；可用 PowerShell `-Profile lean|balanced` 或 bash `--profile lean|balanced` 覆盖。
+- Cursor 默认 `lean`，OpenCode 与 Claude 默认 `balanced`；可用 PowerShell `-Profile lean|balanced` 或 bash `--profile lean|balanced` 覆盖。
 - `lean` 与 `balanced` 只改变 R0/R1 升级阈值和 L0/capsule budget，绝不维护两套 policy 正文。
 - R2 Strict 触发、`P01,P04` 加载与独立审查在两个 profile 中相同。
 - 生成的 adapter/skills 写入 fragment ID/hash、registry hash、profile 与 ownership manifest。下一次 install 会在任何写入前检查 drift，手改受管生成物会 fail-loud。
@@ -57,7 +57,7 @@
 | OpenCode | `rules/workflow-gate.mdc` | `~/.config/opencode/AGENTS.md` 标记块 |
 | OpenCode | `opencode/agents/{build,reason,review}.md` | `~/.config/opencode/agents/{build,reason,review}.md` |
 | OpenCode | binding + ownership state | `~/.config/opencode/agent-workflow-skills/{model-routing.jsonc,install-state.json}` |
-| Claude | `skills/*` + spine | `~/.claude/skills/<skill>/` + `~/.claude/CLAUDE.md` 标记块 |
+| Claude | `policy-v3/generated/{skills,adapters/claude}` | `~/.claude/skills/<skill>/` + `~/.claude/CLAUDE.md` 标记块 + `~/.claude/agent-workflow-skills/install-state.json` |
 
 脚本自动完成全部复制和注入,无需 agent 或用户再手工移动文件。OpenCode 运行中的会话需在安装后重启。
 
@@ -87,8 +87,9 @@
 ./install.sh --tool claude
 ```
 
-- `skills/*` → `~/.claude/skills/<skill>/SKILL.md`。
-- 脊柱正文幂等注入 `~/.claude/CLAUDE.md`(同样的标记块方式)。
+- 生成的 v3 skills → `~/.claude/skills/<skill>/SKILL.md`，不会复制 legacy `skills/`。
+- 带 provenance/profile 的生成 v3 adapter 幂等注入 `~/.claude/CLAUDE.md`(同样的标记块方式)，默认 `balanced`。
+- `~/.claude/agent-workflow-skills/install-state.json` 记录 adapter 与 skills 的 ownership/hash；刷新前会检测 drift，手改受管生成物 fail-loud。
 
 ## 幂等性(可重复运行)
 
@@ -127,7 +128,7 @@
 
 ## 验证已生效
 
-- Cursor 项目脊柱:`<repo>\.cursor\rules\workflow-gate.mdc` 存在且首部 `alwaysApply: true`;新开一轮,agent 应在开头 announce 本轮 A/B/C/D 路径。
+- Cursor 项目 adapter:`<repo>\.cursor\rules\workflow-gate.mdc` 存在且首部 `alwaysApply: true`;新开一轮只执行短路由，普通 R0 不产生强制流程公告。
 - 按需 skill:新开一轮发「按 `code-review` 走,分层审查这段 diff」,应复述 7 层审查 + no-false-negative 复验。
 - 模型路由:应复述 build/reason/review 职责及本机/项目 binding。
 

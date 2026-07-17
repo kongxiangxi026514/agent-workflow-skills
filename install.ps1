@@ -149,7 +149,10 @@ function Copy-Skills([string]$DestSkillsDir, [string]$Source = (Join-Path $RepoR
 
 function Set-BundleState([string]$Dir, [string]$Stage) {
     if (-not (Test-Path $Dir)) { New-Item -ItemType Directory -Path $Dir -Force | Out-Null }
-    Copy-Item -Force (Join-Path $Stage 'model-routing.jsonc') (Join-Path $Dir 'model-routing.jsonc')
+    $binding = Join-Path $Stage 'model-routing.jsonc'
+    if (Test-Path $binding) {
+        Copy-Item -Force $binding (Join-Path $Dir 'model-routing.jsonc')
+    }
     Copy-Item -Force (Join-Path $Stage 'install-state.json') (Join-Path $Dir 'install-state.json')
 }
 
@@ -223,11 +226,13 @@ function Install-OpenCode {
 function Install-Claude {
     $base = Join-Path $env:USERPROFILE '.claude'
     $skillsDir = Join-Path $base 'skills'
-    Copy-Skills $skillsDir
+    Copy-Skills $skillsDir (Join-Path $script:ClaudeStage 'skills')
     $summary.Add("claude: skills -> $skillsDir")
     $claudeMd = Join-Path $base 'CLAUDE.md'
-    Set-SpineBlock $claudeMd (Join-Path $RepoRoot 'rules\workflow-gate.mdc')
-    $summary.Add("claude: spine injected -> $claudeMd (marker block)")
+    Set-SpineBlock $claudeMd (Join-Path $script:ClaudeStage 'workflow-gate.mdc')
+    Set-BundleState (Join-Path $base 'agent-workflow-skills') $script:ClaudeStage
+    $summary.Add("claude: generated v3 spine -> $claudeMd (marker block)")
+    $summary.Add("claude: ownership state -> $base\agent-workflow-skills\install-state.json")
 }
 
 if (($Tool -eq 'cursor' -or $Tool -eq 'all') -and -not $Project) {
@@ -256,7 +261,12 @@ if ($Tool -eq 'cursor' -or $Tool -eq 'all') {
     $script:CursorStage = New-InstallStage $cursorBinding 'cursor' (Get-Profile 'cursor')
 }
 if ($Tool -eq 'claude' -or $Tool -eq 'all') {
-    Test-SpineMarkerIntegrity (Join-Path $env:USERPROFILE '.claude\CLAUDE.md')
+    $claudeBase = Join-Path $env:USERPROFILE '.claude'
+    $claudeState = Join-Path $claudeBase 'agent-workflow-skills\install-state.json'
+    Test-SpineMarkerIntegrity (Join-Path $claudeBase 'CLAUDE.md')
+    Test-SkillOwnership (Join-Path $claudeBase 'skills')
+    Test-PolicyArtifactOwnership $claudeState (Join-Path $claudeBase 'CLAUDE.md') (Join-Path $claudeBase 'skills') $true
+    $script:ClaudeStage = New-InstallStage (Join-Path $claudeBase 'agent-workflow-skills\model-routing.jsonc') 'claude' (Get-Profile 'claude')
 }
 
 try {
@@ -268,7 +278,7 @@ try {
     }
 }
 finally {
-    foreach ($stage in @($script:CursorStage, $script:OpenCodeStage)) {
+    foreach ($stage in @($script:CursorStage, $script:OpenCodeStage, $script:ClaudeStage)) {
         if ($stage -and (Test-Path $stage)) { Remove-Item -Recurse -Force $stage }
     }
 }

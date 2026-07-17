@@ -181,10 +181,14 @@ class RendererAndAuditTests(PolicyV3TestCase):
         renderer = self.load_tool("render_policy")
         self.assertEqual(renderer.profile_names(ROOT), ("balanced", "lean"))
         cursor_lean = renderer.expected_profile_adapter(ROOT, "cursor", "lean")
+        claude_balanced = renderer.expected_profile_adapter(ROOT, "claude", "balanced")
         opencode_balanced = renderer.expected_profile_adapter(ROOT, "opencode", "balanced")
         self.assertIn("profile=lean", cursor_lean)
+        self.assertIn("platform=claude", claude_balanced)
+        self.assertIn("profile=balanced", claude_balanced)
         self.assertIn("profile=balanced", opencode_balanced)
         self.assertIn("source_sha256=", cursor_lean)
+        self.assertIn("registry_sha256=", claude_balanced)
         self.assertIn("registry_sha256=", opencode_balanced)
         self.assertNotEqual(
             renderer.profile_settings(ROOT, "lean")["escalation"],

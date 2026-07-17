@@ -98,10 +98,13 @@ uninstall_opencode() {
 
 uninstall_claude() {
   base="$HOME/.claude"
+  state="$base/agent-workflow-skills/install-state.json"
   remove_skills "$base/skills"
   SUMMARY+=("claude: removed bundle skills from $base/skills")
   remove_spine_block "$base/CLAUDE.md"
   SUMMARY+=("claude: removed spine marker block from $base/CLAUDE.md")
+  [ ! -f "$state" ] || rm -f "$state"
+  SUMMARY+=("claude: removed bundle ownership state when present")
 }
 
 if [ "$TOOL" = opencode ] || [ "$TOOL" = all ]; then assert_spine_markers "$OPENCODE_BASE/AGENTS.md"; fi

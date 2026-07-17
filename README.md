@@ -6,8 +6,8 @@
 
 本仓库把一套"商业级质量优先"的开发 workflow 固化为两类资产:
 
-- **1 个强制脊柱规则**(`rules/workflow-gate.mdc`,`alwaysApply: true`):每轮自动生效的 A/B/C/D 路径门控 + 主/子代理编排 + 全流程 + 质量/架构契约 + 模型路由 + 元认知检查点。它是**规则**,不是 skill —— 安装到项目后每轮强制触发,无需 agent 主动"拉取"。
-- **5 个按需 skill**(`skills/`):`first-principles` / `code-review` / `research-routing` / `parallel-dispatch` / `memory-gate`,由 agent 按 `description` 在需要时自动发现调用。
+- **1 个生成的 L0 router adapter**(`policy-v3/generated/adapters/`):每轮只做短路由和按需 policy 加载，不重复宣布流程或无条件执行完整生命周期。
+- **6 个生成的按需 skills**(`policy-v3/generated/skills/`):`workflow-lifecycle` / `first-principles` / `code-review` / `research-routing` / `parallel-dispatch` / `memory-gate`，由 agent 按风险与任务需要发现调用。
 
 仓库只定义 `build` / `reason` / `review` 三个可移植角色;具体模型 ID 保存在各安装目标的可编辑 JSONC binding 中。安装/卸载全部走脚本,**不需要手动移动或合并任何文件**。
 
@@ -30,9 +30,9 @@
 
 ### v3 profile
 
-Cursor 默认安装 `lean`; OpenCode 默认安装 `balanced`。也可用 `-Profile lean|balanced` 或 `--profile lean|balanced` 显式覆盖。profile **只**调整 R0/R1 的升级阈值与 L0/capsule token budget，不复制或改写任何 policy 正文；所有 R2 Strict 触发、加载 `P01,P04` 与独立审查行为完全一致。
+Cursor 默认安装 `lean`; OpenCode 与 Claude 默认安装 `balanced`。也可用 `-Profile lean|balanced` 或 `--profile lean|balanced` 显式覆盖。profile **只**调整 R0/R1 的升级阈值与 L0/capsule token budget，不复制或改写任何 policy 正文；所有 R2 Strict 触发、加载 `P01,P04` 与独立审查行为完全一致。
 
-生成的 Cursor/OpenCode adapter、按需 skills 和 ownership state 都记录 `policy_id`、fragment hash、registry hash 与 profile。手改已安装生成物或仓库生成物会在下一次刷新前 fail-loud，避免静默覆盖。
+生成的 Cursor/OpenCode/Claude adapter、按需 skills 和 ownership state 都记录 `policy_id`、fragment hash、registry hash 与 profile。手改已安装生成物或仓库生成物会在下一次刷新前 fail-loud，避免静默覆盖。
 
 Windows / Cursor(把强制脊柱写进某个项目):
 
@@ -84,6 +84,7 @@ export AGENT_WORKFLOW_OPENCODE_BUILD_MODEL=provider/build-id AGENT_WORKFLOW_OPEN
 
 - **Cursor(仅项目级)**:`-Project/--project` 自动写入 `.cursor/rules/{workflow-gate,model-routing}.mdc`,binding 位于 `.cursor/agent-workflow-skills/model-routing.jsonc`;脚本不声称存在可编程的全局 Cursor rule。
 - **OpenCode(全局)**:默认 config dir 是字面 `~/.config/opencode`,可用 `-OpenCodeConfigDir/--opencode-config-dir` 覆盖。binding/state、skills、`AGENTS.md` 标记块和 `agents/{build,reason,review}.md` 全部自动落位;完成后必须重启 OpenCode。
+- **Claude(全局)**:`~/.claude/CLAUDE.md` 注入带 provenance/profile 的生成 v3 adapter，`~/.claude/skills/` 只复制生成 v3 skills，ownership state 位于 `~/.claude/agent-workflow-skills/install-state.json`。
 - **Cursor 平台边界**:Cursor 没有文件式跨项目全局规则,所以脚本要求明确项目路径并自动写入 `.cursor/rules/`;对每个项目执行一次即可,不需要手工移动或粘贴文件。
 
 ## 卸载(脚本)
@@ -109,7 +110,7 @@ export AGENT_WORKFLOW_OPENCODE_BUILD_MODEL=provider/build-id AGENT_WORKFLOW_OPEN
 
 ## 验证已生效
 
-- **Cursor 项目脊柱**:确认 `<repo>\.cursor\rules\workflow-gate.mdc` 存在且首部有 `alwaysApply: true`;新开一轮,agent 应在开头 announce 本轮 A/B/C/D 路径。
+- **Cursor 项目 adapter**:确认 `<repo>\.cursor\rules\workflow-gate.mdc` 存在且首部有 `alwaysApply: true`;新开一轮应只执行短路由，普通 R0 不产生强制流程公告。
 - **OpenCode**:确认 `~/.config/opencode/{skills,agents}` 与 `AGENTS.md` 标记块已自动生成,然后重启 OpenCode;无需手工复制。
 - **按需 skill**:新开一轮发「按 code-review 走,分层审查这段 diff」,应能复述 7 层审查 + no-false-negative 复验。
 - **模型路由**:发「说明你读到的模型路由」,应复述 build/reason/review 职责及项目/本机 binding。

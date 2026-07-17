@@ -2,7 +2,7 @@
 name: first-principles
 description: "Derive hard or ambiguous designs from irreducible requirements and constraints."
 ---
-<!-- GENERATED; policy_id=P06; source=policy-v3/fragments/first-principles.md; source_sha256=8a6b985970d5757ab23082e989f5b03676fac629de9a8762beead743bd1b5307; registry_sha256=774f226f2600847405f2d0c038583e051108693286dad5a72490d793332a10ec -->
+<!-- GENERATED; policy_id=P06; source=policy-v3/fragments/first-principles.md; source_sha256=8a6b985970d5757ab23082e989f5b03676fac629de9a8762beead743bd1b5307; registry_sha256=a0f339fcdd0ef7577e2f20f614ca1a2c3408ca5591f3bd3690710a9b3963e1a9 -->
 
 # First-Principles Analysis
 

@@ -110,5 +110,12 @@
     "paths": ["src/auth.py"],
     "expected_risk": "R2",
     "expected_policies": ["P01", "P04"]
+  },
+  {
+    "id": "grilling-alias",
+    "text": "/grilling choose a safe design for this local helper.",
+    "paths": ["src/helper.py"],
+    "expected_risk": "R2",
+    "expected_policies": ["P01", "P04"]
   }
 ]

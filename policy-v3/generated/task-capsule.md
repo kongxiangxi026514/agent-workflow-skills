@@ -1,4 +1,4 @@
-<!-- GENERATED; policy_id=P07; source=policy-v3/fragments/task-capsule.md; source_sha256=023b706560d54f85a53c9dddb17edd3089c8fc1a1ced7df5d6777d2758adcca0; registry_sha256=774f226f2600847405f2d0c038583e051108693286dad5a72490d793332a10ec -->
+<!-- GENERATED; policy_id=P07; source=policy-v3/fragments/task-capsule.md; source_sha256=023b706560d54f85a53c9dddb17edd3089c8fc1a1ced7df5d6777d2758adcca0; registry_sha256=a0f339fcdd0ef7577e2f20f614ca1a2c3408ca5591f3bd3690710a9b3963e1a9 -->
 
 # Task Capsule
 
