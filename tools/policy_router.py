@@ -10,6 +10,7 @@ from typing import Iterable, Sequence
 
 
 DEFAULT_ROOT = Path(__file__).resolve().parents[1]
+CAPSULE_PLACEHOLDER = re.compile(r"\{\{([A-Z_]+)\}\}")
 
 
 def token_proxy(text: str) -> int:
@@ -128,9 +129,10 @@ def build_task_capsule(
         "LOADED_POLICIES": _format_items(loaded_policy_ids),
         "ARTIFACT_POINTERS": _format_items(artifact_pointers),
     }
-    capsule = template
-    for key, value in values.items():
-        capsule = capsule.replace(f"{{{{{key}}}}}", value)
+    capsule = CAPSULE_PLACEHOLDER.sub(
+        lambda match: values.get(match.group(1), match.group(0)),
+        template,
+    )
     budget = registry["token_proxy"]
     proxy = token_proxy(capsule)
     if not budget["capsule_min"] <= proxy <= budget["capsule_max"]:

@@ -4,8 +4,10 @@ import copy
 import importlib.util
 import json
 import re
+import shutil
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 
@@ -110,6 +112,22 @@ class RouterAndCapsuleTests(PolicyV3TestCase):
         ):
             self.assertIn(f"## {heading}", capsule)
 
+    def test_task_capsule_preserves_literal_placeholder_like_user_values(self):
+        router = self.load_tool("policy_router")
+        literal_goal = "{{RISK}} must remain literal user text."
+        capsule = router.build_task_capsule(
+            goal=literal_goal,
+            non_goals=[],
+            risk="R1",
+            allowed_scope=["tools/"],
+            forbidden_scope=["installer rollout"],
+            acceptance=["Focused tests pass."],
+            loaded_policy_ids=["P07"],
+            artifact_pointers=["policy-v3/fragments/task-capsule.md"],
+            root=ROOT,
+        )
+        self.assertIn(f"## Goal\n\n{literal_goal}", capsule)
+
 
 class RendererAndAuditTests(PolicyV3TestCase):
     def test_generated_outputs_have_provenance_and_no_drift(self):
@@ -131,6 +149,47 @@ class RendererAndAuditTests(PolicyV3TestCase):
             (sandbox / first).write_text("stale\n", encoding="utf-8")
             self.assertEqual(renderer.detect_drift(sandbox, expected), [first.as_posix()])
 
+    def test_renderer_rejects_absolute_and_escaping_registry_paths(self):
+        renderer = self.load_tool("render_policy")
+        cases = (
+            ("source", "../outside-source.md"),
+            ("source", "policy-v3/fragments/nested/../../../escaped-source.md"),
+            ("source", "{absolute_source}"),
+            ("artifact", "../outside-artifact.md"),
+            ("artifact", "policy-v3/generated/nested/../../../escaped-artifact.md"),
+            ("artifact", "{absolute_artifact}"),
+        )
+        with tempfile.TemporaryDirectory() as temp:
+            sandbox = Path(temp) / "sandbox"
+            shutil.copytree(POLICY_ROOT, sandbox / "policy-v3")
+            original_registry = _json(sandbox / "policy-v3/registry.json")
+            outside_source = sandbox.parent / "outside-source.md"
+            escaped_source = sandbox / "escaped-source.md"
+            for source in (outside_source, escaped_source):
+                source.write_text("outside policy root\n", encoding="utf-8")
+            for field, reference in cases:
+                with self.subTest(field=field, reference=reference):
+                    registry = copy.deepcopy(original_registry)
+                    registry["policies"][0][field] = reference.format(
+                        absolute_source=outside_source,
+                        absolute_artifact=sandbox.parent / "outside-artifact.md",
+                    )
+                    (sandbox / "policy-v3/registry.json").write_text(
+                        json.dumps(registry), encoding="utf-8"
+                    )
+                    with self.assertRaisesRegex(ValueError, "outside|absolute"):
+                        renderer.expected_outputs(sandbox)
+
+    def test_renderer_does_not_write_outside_generated_root(self):
+        renderer = self.load_tool("render_policy")
+        with tempfile.TemporaryDirectory() as temp:
+            sandbox = Path(temp) / "sandbox"
+            sandbox.mkdir()
+            outside = sandbox.parent / "outside-created.md"
+            with self.assertRaisesRegex(ValueError, "outside|absolute"):
+                renderer.write_outputs(sandbox, {Path("../outside-created.md"): "danger\n"})
+            self.assertFalse(outside.exists())
+
     def test_budget_duplicate_and_stale_reference_guards_detect_mutations(self):
         audit = self.load_tool("audit_context_budget")
         registry = _json(POLICY_ROOT / "registry.json")
@@ -142,12 +201,24 @@ class RendererAndAuditTests(PolicyV3TestCase):
         self.assertEqual(len(duplicates), 1)
         self.assertGreater(audit.token_proxy("x" * 6001), 1500)
 
+    def test_audit_fails_when_policy_recall_or_precision_drops(self):
+        audit = self.load_tool("audit_context_budget")
+        baseline = audit._routing_metrics(ROOT)
+        for metric in ("policy_recall", "policy_precision"):
+            with self.subTest(metric=metric):
+                degraded = copy.deepcopy(baseline)
+                degraded[metric] = 0.97
+                with mock.patch.object(audit, "_routing_metrics", return_value=degraded):
+                    self.assertFalse(audit.audit(ROOT)["passed"])
+
     def test_audit_meets_budget_recall_and_precision_gates(self):
         audit = self.load_tool("audit_context_budget")
         report = audit.audit(ROOT)
         self.assertTrue(report["passed"], report)
         self.assertLessEqual(report["budget"]["l0_token_proxy"], 1500)
         self.assertLessEqual(report["budget"]["max_fragment_token_proxy"], 3000)
+        self.assertGreaterEqual(report["routing"]["policy_recall"], 0.98)
+        self.assertGreaterEqual(report["routing"]["policy_precision"], 0.98)
         self.assertGreaterEqual(report["routing"]["risk_memory_recall"], 0.98)
         self.assertGreaterEqual(report["routing"]["research_review_recall"], 0.95)
         self.assertLess(report["routing"]["heavy_false_trigger_rate"], 0.10)

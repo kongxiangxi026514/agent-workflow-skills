@@ -15,7 +15,7 @@ if str(DEFAULT_ROOT) not in sys.path:
     sys.path.insert(0, str(DEFAULT_ROOT))
 
 from tools.policy_router import load_registry, route_task, token_proxy
-from tools.render_policy import detect_drift, expected_outputs
+from tools.render_policy import detect_drift, expected_outputs, resolve_policy_paths
 
 
 REQUIRED_FIELDS = {
@@ -47,8 +47,11 @@ def validate_registry(root: Path | str, registry: dict) -> list[str]:
         if missing:
             errors.append(f"{policy.get('policy_id', '?')}: missing fields {sorted(missing)}")
             continue
-        source = root / policy["source"]
-        artifact = root / policy["artifact"]
+        try:
+            source, artifact = resolve_policy_paths(root, policy)
+        except ValueError as error:
+            errors.append(f"{policy['policy_id']}: {error}")
+            continue
         if not source.is_file():
             errors.append(f"{policy['policy_id']}: stale source {policy['source']}")
             continue
@@ -123,13 +126,27 @@ def audit(root: Path | str = DEFAULT_ROOT) -> dict:
     """Return the complete policy-v3 acceptance report."""
     root = Path(root)
     registry = load_registry(root)
+    registry_errors = validate_registry(root, registry)
+    routing = _routing_metrics(root)
+    if registry_errors:
+        return {
+            "passed": False,
+            "budget": {},
+            "routing": routing,
+            "integrity": {
+                "registry_errors": registry_errors,
+                "duplicate_paragraphs": 0,
+                "stale_references": sum("stale " in error for error in registry_errors),
+                "generated_drift": 0,
+                "concrete_model_id_hits": [],
+            },
+        }
     outputs = expected_outputs(root)
     sources = {
         policy["source"]: (root / policy["source"]).read_text(encoding="utf-8")
         for policy in registry["policies"]
         if (root / policy["source"]).is_file()
     }
-    registry_errors = validate_registry(root, registry)
     duplicates = find_duplicate_paragraphs(sources)
     model_hits = sorted({match.group(0) for text in sources.values() for match in MODEL_ID_PATTERN.finditer(text)})
     l0 = next(policy for policy in registry["policies"] if policy["policy_id"] == "P00")
@@ -138,7 +155,6 @@ def audit(root: Path | str = DEFAULT_ROOT) -> dict:
         "max_fragment_token_proxy": max(token_proxy(text) for text in sources.values()),
         "fragment_token_proxies": {name: token_proxy(text) for name, text in sorted(sources.items())},
     }
-    routing = _routing_metrics(root)
     integrity = {
         "registry_errors": registry_errors,
         "duplicate_paragraphs": len(duplicates),
@@ -150,6 +166,8 @@ def audit(root: Path | str = DEFAULT_ROOT) -> dict:
     passed = (
         budget["l0_token_proxy"] <= limits["l0_max"]
         and budget["max_fragment_token_proxy"] <= limits["fragment_max"]
+        and routing["policy_recall"] >= 0.98
+        and routing["policy_precision"] >= 0.98
         and routing["risk_memory_recall"] >= 0.98
         and routing["research_review_recall"] >= 0.95
         and routing["heavy_false_trigger_rate"] < 0.10
