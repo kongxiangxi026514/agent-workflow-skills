@@ -1,0 +1,114 @@
+[
+  {
+    "id": "readonly-local-explanation",
+    "text": "Explain how the local cache helper works. Do not edit files.",
+    "paths": ["src/cache.py"],
+    "expected_risk": "R0",
+    "expected_policies": []
+  },
+  {
+    "id": "quick-typo",
+    "text": "Quick change: fix one typo in README and only run a light check.",
+    "paths": ["README.md"],
+    "expected_risk": "R0",
+    "expected_policies": []
+  },
+  {
+    "id": "ordinary-multifile-change",
+    "text": "Implement the parser update across the service and its focused tests.",
+    "paths": ["src/parser.py", "tests/test_parser.py"],
+    "expected_risk": "R1",
+    "expected_policies": ["P01"]
+  },
+  {
+    "id": "strict-user-override",
+    "text": "Use strict TDD and the full process for this small helper change.",
+    "paths": ["src/helper.py"],
+    "expected_risk": "R2",
+    "expected_policies": ["P01", "P04"]
+  },
+  {
+    "id": "version-sensitive-api",
+    "text": "Check the official docs for the latest Pydantic v2 model config API.",
+    "paths": [],
+    "expected_risk": "R1",
+    "expected_policies": ["P01", "P02"]
+  },
+  {
+    "id": "external-literature",
+    "text": "Research recent papers and produce a cited multi-source comparison.",
+    "paths": [],
+    "expected_risk": "R1",
+    "expected_policies": ["P01", "P02"]
+  },
+  {
+    "id": "continual-learning-hook",
+    "text": "Run the continual-learning skill now with the agents-memory-updater.",
+    "paths": ["AGENTS.md"],
+    "expected_risk": "R2",
+    "expected_policies": ["P03"]
+  },
+  {
+    "id": "memory-proposal",
+    "text": "Update AGENTS.md with durable long-term memory from this transcript.",
+    "paths": ["AGENTS.md"],
+    "expected_risk": "R2",
+    "expected_policies": ["P03"]
+  },
+  {
+    "id": "code-review",
+    "text": "Review this code diff before merge and report blocking findings.",
+    "paths": ["src/router.py", "tests/test_router.py"],
+    "expected_risk": "R1",
+    "expected_policies": ["P01", "P04"]
+  },
+  {
+    "id": "parallel-dispatch",
+    "text": "Split these independent backend and frontend tasks into parallel workers.",
+    "paths": ["server/", "web/"],
+    "expected_risk": "R1",
+    "expected_policies": ["P01", "P05", "P07"]
+  },
+  {
+    "id": "first-principles-architecture",
+    "text": "Use first principles for this non-obvious architecture decision.",
+    "paths": ["src/architecture/"],
+    "expected_risk": "R2",
+    "expected_policies": ["P01", "P04", "P06"]
+  },
+  {
+    "id": "quick-crs-conflict",
+    "text": "Quick change, skip the full process: fix the CRS conversion contract.",
+    "paths": ["src/geometry/crs.py"],
+    "expected_risk": "R2",
+    "expected_policies": ["P01", "P04"]
+  },
+  {
+    "id": "schema-migration",
+    "text": "Change the persisted schema and add a migration for existing data.",
+    "paths": ["src/schema.py", "migrations/"],
+    "expected_risk": "R2",
+    "expected_policies": ["P01", "P04"]
+  },
+  {
+    "id": "real-data-root-cause",
+    "text": "The real-data ground truth is suspect and the root cause is unknown.",
+    "paths": ["src/data/", "tools/diagnose.py"],
+    "expected_risk": "R2",
+    "expected_policies": ["P01", "P04", "P06"]
+  },
+  {
+    "id": "production-deployment",
+    "text": "Modify the production deployment path for the cloud GPU service.",
+    "paths": ["deploy/service.yaml", "src/serve.py"],
+    "expected_risk": "R2",
+    "expected_policies": ["P01", "P04"]
+  },
+  {
+    "id": "security-review",
+    "text": "Perform a security review of the authentication boundary.",
+    "paths": ["src/auth.py"],
+    "expected_risk": "R2",
+    "expected_policies": ["P01", "P04"]
+  }
+]
