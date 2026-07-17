@@ -2,7 +2,7 @@
 name: workflow-lifecycle
 description: "Discovery, planning, TDD, acceptance, and closeout for R1/R2 work."
 ---
-<!-- GENERATED; policy_id=P01; source=policy-v3/fragments/workflow-lifecycle.md; source_sha256=5c2d49b16de61049b4e59a1d244a95f112c29d373700d60bf3c708ff80eb5feb; registry_sha256=a0f339fcdd0ef7577e2f20f614ca1a2c3408ca5591f3bd3690710a9b3963e1a9 -->
+<!-- GENERATED; policy_id=P01; source=policy-v3/fragments/workflow-lifecycle.md; source_sha256=1e44b9b6ac93ca062aec8e06989d0905f73204972389f4334df892fd40785009; registry_sha256=a0f339fcdd0ef7577e2f20f614ca1a2c3408ca5591f3bd3690710a9b3963e1a9 -->
 
 # Workflow Lifecycle
 
@@ -29,12 +29,15 @@ Request explicit user approval of that design/spec before creating an implementa
 
 ## Task ledger, checkpoint, and handoff
 
-Use a compact Task ledger only for an R2, multi-session, or explicitly resumable task. It is a task artifact, not always-on memory and not a Trellis runtime dependency. Put it in a user-approved task-artifact location; do not create persistent workspace memory or add a runtime package for it.
+Use a compact Task ledger only for an R2, multi-session, or explicitly resumable task. It is a task artifact, not always-on memory and not a Trellis runtime dependency. Before creating it, obtain the user's approval for one repository-contained, relative artifact location. Reject absolute paths, `..` traversal, and any resolved location outside that repository. Do not create persistent workspace memory or add a runtime package for it.
 
 - **Objective and decisions**: record the approved goal, non-goals, selected alternative, and unresolved choices.
 - **Completed steps and failures**: record each completed bounded step, failed attempt, and its evidence without copying full transcripts.
-- **Checkpoint**: after a meaningful verification or blocker, record changed paths, exact commands and outcomes, remaining risk, and the next action.
+- **Redaction boundary**: prohibit secrets, raw transcripts, and sensitive command arguments. Redact affected values and command portions as `<redacted>`; do not replace this with a claim that sensitive data is safe to retain.
+- **Checkpoint**: after a meaningful verification or blocker, record changed paths, redacted commands and outcomes, remaining risk, and the next action.
 - **Handoff**: end with a compact summary of task state, required artifacts, constraints, and the next owner action. A successor verifies the cited evidence instead of trusting the ledger blindly.
+
+Validate a ledger with `tools/validate_task_ledger.py` before handoff. The validator accepts only the explicit, user-approved relative location and rejects unredacted records.
 
 ## Worktree and branch lifecycle
 

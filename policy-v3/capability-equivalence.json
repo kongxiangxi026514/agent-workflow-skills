@@ -22,7 +22,7 @@
       "v3_evidence": {
         "policy_id": "P01",
         "source": "policy-v3/fragments/workflow-lifecycle.md",
-        "required_markers": ["Task ledger", "Checkpoint", "Handoff"]
+        "required_markers": ["Task ledger", "user-approved", "redacted", "Checkpoint", "Handoff"]
       }
     },
     {

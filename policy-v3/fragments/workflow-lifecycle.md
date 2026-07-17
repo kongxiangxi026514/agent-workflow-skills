@@ -23,12 +23,15 @@ Request explicit user approval of that design/spec before creating an implementa
 
 ## Task ledger, checkpoint, and handoff
 
-Use a compact Task ledger only for an R2, multi-session, or explicitly resumable task. It is a task artifact, not always-on memory and not a Trellis runtime dependency. Put it in a user-approved task-artifact location; do not create persistent workspace memory or add a runtime package for it.
+Use a compact Task ledger only for an R2, multi-session, or explicitly resumable task. It is a task artifact, not always-on memory and not a Trellis runtime dependency. Before creating it, obtain the user's approval for one repository-contained, relative artifact location. Reject absolute paths, `..` traversal, and any resolved location outside that repository. Do not create persistent workspace memory or add a runtime package for it.
 
 - **Objective and decisions**: record the approved goal, non-goals, selected alternative, and unresolved choices.
 - **Completed steps and failures**: record each completed bounded step, failed attempt, and its evidence without copying full transcripts.
-- **Checkpoint**: after a meaningful verification or blocker, record changed paths, exact commands and outcomes, remaining risk, and the next action.
+- **Redaction boundary**: prohibit secrets, raw transcripts, and sensitive command arguments. Redact affected values and command portions as `<redacted>`; do not replace this with a claim that sensitive data is safe to retain.
+- **Checkpoint**: after a meaningful verification or blocker, record changed paths, redacted commands and outcomes, remaining risk, and the next action.
 - **Handoff**: end with a compact summary of task state, required artifacts, constraints, and the next owner action. A successor verifies the cited evidence instead of trusting the ledger blindly.
+
+Validate a ledger with `tools/validate_task_ledger.py` before handoff. The validator accepts only the explicit, user-approved relative location and rejects unredacted records.
 
 ## Worktree and branch lifecycle
 
