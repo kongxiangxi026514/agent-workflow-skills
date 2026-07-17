@@ -1,0 +1,202 @@
+{
+  "schema_version": "3.0",
+  "token_proxy": {
+    "algorithm": "ceil(characters/4)",
+    "l0_max": 1500,
+    "fragment_max": 3000,
+    "capsule_min": 300,
+    "capsule_max": 800
+  },
+  "router": {
+    "risk_order": ["R0", "R1", "R2"],
+    "quick_override_patterns": [
+      "\\bquick(?:ly)?\\b",
+      "\\bminimal change\\b",
+      "\\bskip the full process\\b",
+      "\\bdo not use full process\\b"
+    ],
+    "strict_override_patterns": [
+      "\\bstrict tdd\\b",
+      "\\bfull process\\b",
+      "\\bfull sop\\b"
+    ],
+    "change_patterns": [
+      "\\badd\\b",
+      "\\bbuild\\b",
+      "\\bchange\\b",
+      "\\bcreate\\b",
+      "\\bfix\\b",
+      "\\bimplement\\b",
+      "\\bmodify\\b",
+      "\\brefactor\\b",
+      "\\bupdate\\b"
+    ],
+    "high_risk_patterns": [
+      "\\b(?:change|fix|modify|migrate|update)\\b.{0,40}\\b(?:schema|crs|coordinate|geometry)\\b",
+      "\\b(?:schema|crs|coordinate|geometry)\\b.{0,40}\\b(?:contract|conversion|change|migration)\\b",
+      "\\b(?:training loss|ground truth|real-data|data loss|destructive)\\b",
+      "\\b(?:production deployment|cloud gpu|npu|authentication boundary)\\b",
+      "\\bsecurity review\\b"
+    ],
+    "high_risk_path_patterns": [
+      "(^|/)(migrations?|schema|geometry|deploy)(/|$)",
+      "(^|/)(auth|security)(\\.|/)"
+    ],
+    "risk_auto_load": {
+      "R0": [],
+      "R1": ["P01"],
+      "R2": ["P01", "P04"]
+    }
+  },
+  "policies": [
+    {
+      "policy_id": "P00",
+      "name": "risk-router",
+      "tier": "L0",
+      "description": "Always-on deterministic risk router and policy loader.",
+      "trigger": {"any": [], "none": []},
+      "path_selectors": [],
+      "risk": "R0",
+      "budget_tokens": 1500,
+      "source": "policy-v3/fragments/l0-router.md",
+      "artifact": "policy-v3/generated/l0-router.md",
+      "on_demand": false
+    },
+    {
+      "policy_id": "P01",
+      "name": "workflow-lifecycle",
+      "tier": "L1",
+      "description": "Discovery, planning, TDD, acceptance, and closeout for R1/R2 work.",
+      "trigger": {"any": [], "none": []},
+      "path_selectors": [],
+      "risk": "R1",
+      "budget_tokens": 1200,
+      "source": "policy-v3/fragments/workflow-lifecycle.md",
+      "artifact": "policy-v3/generated/skills/workflow-lifecycle/SKILL.md",
+      "on_demand": true
+    },
+    {
+      "policy_id": "P02",
+      "name": "research-routing",
+      "tier": "L1",
+      "description": "Select evidence tools for external documentation, web, papers, and repositories.",
+      "trigger": {
+        "any": [
+          "\\bcontext7\\b",
+          "\\bofficial docs?\\b",
+          "\\bthird-party api\\b",
+          "\\blatest .{0,30}\\bapi\\b",
+          "\\b(?:external|web) research\\b",
+          "\\b(?:recent papers?|literature|multi-source comparison)\\b",
+          "\\bgithub (?:issue|repository|commit|pull request)\\b"
+        ],
+        "none": ["\\blocal (?:function|variable|symbol)\\b"]
+      },
+      "path_selectors": [],
+      "risk": "R1",
+      "budget_tokens": 900,
+      "source": "policy-v3/fragments/research-routing.md",
+      "artifact": "policy-v3/generated/skills/research-routing/SKILL.md",
+      "on_demand": true
+    },
+    {
+      "policy_id": "P03",
+      "name": "memory-gate",
+      "tier": "L1",
+      "description": "Protect persistent memory with proposal, hash, quarantine, and human approval rails.",
+      "trigger": {
+        "any": [
+          "\\bcontinual-learning\\b",
+          "\\bagents-memory-updater\\b",
+          "\\bupdate agents\\.md\\b",
+          "\\b(?:persistent|long-term) memory\\b"
+        ],
+        "none": ["\\bmemory usage\\b"],
+        "exclusive": true
+      },
+      "path_selectors": ["AGENTS.md"],
+      "risk": "R2",
+      "budget_tokens": 1100,
+      "source": "policy-v3/fragments/memory-gate.md",
+      "artifact": "policy-v3/generated/skills/memory-gate/SKILL.md",
+      "on_demand": true
+    },
+    {
+      "policy_id": "P04",
+      "name": "code-review",
+      "tier": "L1",
+      "description": "Independent layered review with adversarial checks for high-risk changes.",
+      "trigger": {
+        "any": [
+          "\\bcode review\\b",
+          "\\breview (?:this|the) (?:code|diff|pr|changes?)\\b",
+          "\\bbefore merge\\b",
+          "\\bsecurity review\\b"
+        ],
+        "none": ["\\breview (?:this|my) (?:sentence|wording)\\b"]
+      },
+      "path_selectors": [],
+      "risk": "R1",
+      "budget_tokens": 1100,
+      "source": "policy-v3/fragments/code-review.md",
+      "artifact": "policy-v3/generated/skills/code-review/SKILL.md",
+      "on_demand": true
+    },
+    {
+      "policy_id": "P05",
+      "name": "parallel-dispatch",
+      "tier": "L1",
+      "description": "Choose serial or parallel workers and enforce bounded task capsules.",
+      "trigger": {
+        "any": [
+          "\\bparallel (?:agents?|workers?|subtasks?|dispatch)\\b",
+          "\\bsplit .{0,40}\\bindependent .{0,30}\\b(?:tasks?|workers?)\\b",
+          "\\bmultiple agents?\\b"
+        ],
+        "none": ["\\bparallel lines?\\b"],
+        "requires": ["P07"]
+      },
+      "path_selectors": [],
+      "risk": "R1",
+      "budget_tokens": 900,
+      "source": "policy-v3/fragments/parallel-dispatch.md",
+      "artifact": "policy-v3/generated/skills/parallel-dispatch/SKILL.md",
+      "on_demand": true
+    },
+    {
+      "policy_id": "P06",
+      "name": "first-principles",
+      "tier": "L1",
+      "description": "Derive hard or ambiguous designs from irreducible requirements and constraints.",
+      "trigger": {
+        "any": [
+          "\\buse first principles\\b",
+          "\\bnon-obvious architecture\\b",
+          "\\bhard architecture\\b",
+          "\\broot cause is unknown\\b",
+          "\\bambiguous design\\b"
+        ],
+        "none": ["\\bfirst principles heading\\b"]
+      },
+      "path_selectors": [],
+      "risk": "R2",
+      "budget_tokens": 900,
+      "source": "policy-v3/fragments/first-principles.md",
+      "artifact": "policy-v3/generated/skills/first-principles/SKILL.md",
+      "on_demand": true
+    },
+    {
+      "policy_id": "P07",
+      "name": "task-capsule",
+      "tier": "L1",
+      "description": "A bounded worker handoff containing scope, acceptance, policies, and artifact pointers.",
+      "trigger": {"any": [], "none": []},
+      "path_selectors": [],
+      "risk": "R0",
+      "budget_tokens": 800,
+      "source": "policy-v3/fragments/task-capsule.md",
+      "artifact": "policy-v3/generated/task-capsule.md",
+      "on_demand": true
+    }
+  ]
+}
