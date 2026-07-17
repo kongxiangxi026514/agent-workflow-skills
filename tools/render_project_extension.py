@@ -180,7 +180,7 @@ def select_extension_policy_ids(overlay: dict, task: str, paths: Sequence[str]) 
     for policy in overlay.get("policies", []):
         trigger = policy["trigger"]
         task_matches = _matches(trigger.get("any", []), task) and not _matches(trigger.get("none", []), task)
-        path_matches = _matches(policy["path_selectors"], "\n".join(normalized_paths))
+        path_matches = any(_matches(policy["path_selectors"], path) for path in normalized_paths)
         if task_matches or path_matches:
             selected.append(policy["policy_id"])
     return sorted(selected)

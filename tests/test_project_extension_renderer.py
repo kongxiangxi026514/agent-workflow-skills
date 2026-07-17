@@ -145,6 +145,28 @@ class ProjectExtensionRendererTests(unittest.TestCase):
 
         self.assertTrue(any("registry_sha256" in error for error in report["errors"]))
 
+    def test_path_selectors_match_each_path_independently_of_order(self):
+        renderer = self.load_tool()
+        overlay = {
+            "policies": [
+                {
+                    "policy_id": "P20",
+                    "trigger": {"any": [], "none": []},
+                    "path_selectors": [r"^src/roadcode_pipeline/"],
+                }
+            ]
+        }
+
+        for paths in (
+            ["README.md", "src/roadcode_pipeline/case_builder.py"],
+            ["src/roadcode_pipeline/case_builder.py", "README.md"],
+        ):
+            with self.subTest(paths=paths):
+                self.assertEqual(
+                    renderer.select_extension_policy_ids(overlay, "Implement a helper.", paths),
+                    ["P20"],
+                )
+
     def test_canonical_renderer_accepts_project_extension_root(self):
         registry_sha256 = hashlib.sha256(
             _canonical_text(ROOT / "policy-v3" / "registry.json").encode("utf-8")
