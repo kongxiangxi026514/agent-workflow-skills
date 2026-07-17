@@ -11,6 +11,7 @@ TOOL="cursor"
 PROJECT=""
 OPENCODE_CONFIG_DIR=""
 PROFILE=""
+PROFILE_SET=0
 OPENCODE_BUILD_MODEL="${AGENT_WORKFLOW_OPENCODE_BUILD_MODEL:-}"
 OPENCODE_REASON_MODEL="${AGENT_WORKFLOW_OPENCODE_REASON_MODEL:-}"
 OPENCODE_REVIEW_MODEL="${AGENT_WORKFLOW_OPENCODE_REVIEW_MODEL:-}"
@@ -23,8 +24,8 @@ while [ $# -gt 0 ]; do
     --project=*) PROJECT="${1#*=}"; shift ;;
     --opencode-config-dir) OPENCODE_CONFIG_DIR="${2:-}"; shift 2 ;;
     --opencode-config-dir=*) OPENCODE_CONFIG_DIR="${1#*=}"; shift ;;
-    --profile) PROFILE="${2:-}"; shift 2 ;;
-    --profile=*) PROFILE="${1#*=}"; shift ;;
+    --profile) PROFILE="${2:-}"; PROFILE_SET=1; shift 2 ;;
+    --profile=*) PROFILE="${1#*=}"; PROFILE_SET=1; shift ;;
     --build-model|--opencode-build-model) OPENCODE_BUILD_MODEL="${2:-}"; shift 2 ;;
     --build-model=*|--opencode-build-model=*) OPENCODE_BUILD_MODEL="${1#*=}"; shift ;;
     --reason-model|--opencode-reason-model) OPENCODE_REASON_MODEL="${2:-}"; shift 2 ;;
@@ -37,6 +38,11 @@ while [ $# -gt 0 ]; do
     *) echo "unknown argument: $1" >&2; exit 1 ;;
   esac
 done
+
+if [ "$PROFILE_SET" = 1 ] && [ -z "$PROFILE" ]; then
+  echo "--profile requires lean or balanced" >&2
+  exit 1
+fi
 
 REPO_ROOT="$(cd "$(dirname "$0")" && pwd)"
 BEGIN_MARKER='<!-- BEGIN agent-workflow-skills spine -->'

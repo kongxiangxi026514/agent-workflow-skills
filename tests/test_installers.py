@@ -231,8 +231,11 @@ class InstallerTests(unittest.TestCase):
         self.assertIn("agents/build.md", state["owned_sha256"])
         self.assertEqual(self.invoke("uninstall.ps1", "opencode", "-OpenCodeConfigDir", str(custom)).returncode, 0)
         self.assertFalse(agent.exists())
-    def test_portable_runtime_policy_contains_roles_not_model_ids(self):
-        files = [ROOT / "rules/workflow-gate.mdc", ROOT / "skills/parallel-dispatch/SKILL.md"]
+    def test_generated_runtime_policy_contains_roles_not_model_ids(self):
+        generated = ROOT / "policy-v3/generated"
+        files = sorted((generated / "adapters").rglob("*")) + sorted((generated / "skills").rglob("SKILL.md"))
+        files = [path for path in files if path.is_file()]
+        self.assertTrue(files)
         text = "\n".join(path.read_text(encoding="utf-8") for path in files)
         for role in ("build", "reason", "review"):
             self.assertIn(role, text)
@@ -276,6 +279,41 @@ run "$repo/install.sh" --tool opencode --opencode-config-dir "$cfgdir"
 grep -q 'model: acme/new' "$cfgdir/agents/build.md"
 run "$repo/uninstall.sh" --tool opencode --opencode-config-dir "$cfgdir"
 test ! -e "$cfgdir/agents/build.md"; test ! -e "$binding"
+''')
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+    def test_empty_bash_profile_is_rejected_before_mutation(self):
+        result = self.run_bash(r'''
+set -euo pipefail
+repo="$1"; root="$(mktemp -d)"; trap 'rm -rf "$root"' EXIT; export HOME="$root/home"
+run() { env -i HOME="$HOME" PATH=/usr/local/bin:/usr/bin:/bin bash "$@"; }
+cfgdir="$root/config"; mkdir -p "$cfgdir"
+if run "$repo/install.sh" --tool opencode --opencode-config-dir "$cfgdir" --profile= --build-model acme/terra --review-model other/glm; then exit 1; fi
+test ! -e "$cfgdir/agents/build.md"; test ! -e "$cfgdir/agent-workflow-skills/install-state.json"
+''')
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+    def test_bash_profiles_default_override_and_owned_spine_drift(self):
+        result = self.run_bash(r'''
+set -euo pipefail
+repo="$1"; root="$(mktemp -d)"; trap 'rm -rf "$root"' EXIT; export HOME="$root/home"
+run() { env -i HOME="$HOME" PATH=/usr/local/bin:/usr/bin:/bin bash "$@"; }
+project="$root/project"; cfgdir="$root/opencode"; mkdir -p "$project" "$cfgdir"
+run "$repo/install.sh" --tool cursor --project "$project" --build-model acme/terra --review-model other/glm
+grep -q 'profile=lean' "$project/.cursor/rules/workflow-gate.mdc"
+run "$repo/install.sh" --tool cursor --project "$project" --profile=balanced
+grep -q 'profile=balanced' "$project/.cursor/rules/workflow-gate.mdc"
+run "$repo/install.sh" --tool opencode --opencode-config-dir "$cfgdir" --build-model acme/terra --review-model other/glm
+agents="$cfgdir/AGENTS.md"; grep -q 'profile=balanced' "$agents"
+run "$repo/install.sh" --tool opencode --opencode-config-dir "$cfgdir" --profile=lean
+grep -q 'profile=lean' "$agents"
+run "$repo/install.sh" --tool opencode --opencode-config-dir "$cfgdir"
+grep -q 'profile=balanced' "$agents"
+cp "$agents" "$root/invalid.before"
+if run "$repo/install.sh" --tool opencode --opencode-config-dir "$cfgdir" --profile=foo; then exit 1; fi
+cmp "$agents" "$root/invalid.before"
+sed -i '/END agent-workflow-skills spine/i tampered generated policy' "$agents"
+cp "$agents" "$root/agents.before"; cp "$cfgdir/agents/build.md" "$root/build.before"
+if run "$repo/install.sh" --tool opencode --opencode-config-dir "$cfgdir" --profile=lean; then exit 1; fi
+cmp "$agents" "$root/agents.before"; cmp "$cfgdir/agents/build.md" "$root/build.before"
 ''')
         self.assertEqual(result.returncode, 0, result.stderr.decode())
     def test_orphan_marker_preserves_content_for_install_and_uninstall(self):
