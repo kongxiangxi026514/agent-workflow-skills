@@ -167,6 +167,30 @@ class ProjectExtensionRendererTests(unittest.TestCase):
                     ["P20"],
                 )
 
+    def test_manifest_hashes_each_generated_artifact_and_router_pins_manifest(self):
+        renderer = self.load_tool()
+        registry_sha256 = hashlib.sha256(
+            _canonical_text(ROOT / "policy-v3" / "registry.json").encode("utf-8")
+        ).hexdigest()
+        with tempfile.TemporaryDirectory() as temp:
+            project_root = Path(temp)
+            _write_extension(project_root, registry_sha256)
+            expected = renderer.expected_extension_outputs(ROOT, project_root)
+            manifest_path = Path("workflow-policy/generated/manifest.json")
+            router_path = Path("workflow-policy/generated/cursor/project-extension-router.mdc")
+            manifest_text = expected[manifest_path]
+            manifest = json.loads(manifest_text)
+
+        for entry in manifest["policies"] + manifest["routes"]:
+            self.assertEqual(
+                entry["artifact_sha256"],
+                hashlib.sha256(expected[Path(entry["artifact"])].encode("utf-8")).hexdigest(),
+            )
+        self.assertIn(
+            f"manifest_sha256={hashlib.sha256(manifest_text.encode('utf-8')).hexdigest()}",
+            expected[router_path],
+        )
+
     def test_canonical_renderer_accepts_project_extension_root(self):
         registry_sha256 = hashlib.sha256(
             _canonical_text(ROOT / "policy-v3" / "registry.json").encode("utf-8")

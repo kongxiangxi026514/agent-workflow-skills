@@ -204,7 +204,7 @@ def _render_policy(policy: dict, body: str, base_hash: str, extension_hash: str)
     return f"{provenance}\n\n{body}"
 
 
-def _render_router(overlay: dict, base_hash: str, extension_hash: str) -> str:
+def _render_router(overlay: dict, base_hash: str, extension_hash: str, manifest_hash: str) -> str:
     lines = [
         "---",
         "description: Generated v3 project extension router.",
@@ -213,7 +213,8 @@ def _render_router(overlay: dict, base_hash: str, extension_hash: str) -> str:
         "<!-- Managed by agent-workflow-skills project extension. -->",
         (
             "<!-- GENERATED; policy_id=project-extension-router; "
-            f"base_registry_sha256={base_hash}; project_extension_sha256={extension_hash} -->"
+            f"base_registry_sha256={base_hash}; project_extension_sha256={extension_hash}; "
+            f"manifest_sha256={manifest_hash} -->"
         ),
         "",
         "# Project Extension Router",
@@ -243,13 +244,20 @@ def _render_route(route: dict, body: str, base_hash: str, extension_hash: str) -
     return f"{frontmatter}{provenance}\n\n{body}"
 
 
-def _render_manifest(overlay: dict, base_hash: str, extension_hash: str, project_root: Path) -> str:
+def _render_manifest(
+    overlay: dict,
+    base_hash: str,
+    extension_hash: str,
+    project_root: Path,
+    artifact_outputs: Mapping[Path, str],
+) -> str:
     policies = []
     for policy in sorted(overlay["policies"], key=lambda item: item["policy_id"]):
         body = _canonical_text(project_root / policy["source"])
         policies.append(
             {
                 "artifact": policy["artifact"],
+                "artifact_sha256": _sha256(artifact_outputs[Path(policy["artifact"])]),
                 "policy_id": policy["policy_id"],
                 "source": policy["source"],
                 "source_sha256": _sha256(body),
@@ -264,6 +272,7 @@ def _render_manifest(overlay: dict, base_hash: str, extension_hash: str, project
         "routes": [
             {
                 "artifact": route["artifact"],
+                "artifact_sha256": _sha256(artifact_outputs[Path(route["artifact"])]),
                 "base_policy_id": route["base_policy_id"],
                 "route_id": route["route_id"],
                 "source": route["source"],
@@ -307,11 +316,10 @@ def expected_extension_outputs(portable_root: Path | str, project_root: Path | s
             for route in overlay.get("routes", [])
         }
     )
+    manifest = _render_manifest(overlay, base_hash, extension_hash, project_root, outputs)
+    outputs[GENERATED_ROOT / "manifest.json"] = manifest
     outputs[GENERATED_ROOT / "cursor/project-extension-router.mdc"] = _render_router(
-        overlay, base_hash, extension_hash
-    )
-    outputs[GENERATED_ROOT / "manifest.json"] = _render_manifest(
-        overlay, base_hash, extension_hash, project_root
+        overlay, base_hash, extension_hash, _sha256(manifest)
     )
     return outputs
 
