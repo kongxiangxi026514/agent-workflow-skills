@@ -31,6 +31,10 @@
       "\\brefactor\\b",
       "\\bupdate\\b"
     ],
+    "lean_change_patterns": [
+      "\\btypo\\b",
+      "\\bspelling\\b"
+    ],
     "high_risk_patterns": [
       "\\b(?:change|fix|modify|migrate|update)\\b.{0,40}\\b(?:schema|crs|coordinate|geometry)\\b",
       "\\b(?:schema|crs|coordinate|geometry)\\b.{0,40}\\b(?:contract|conversion|change|migration)\\b",

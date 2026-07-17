@@ -126,7 +126,7 @@ class RendererAndAuditTests(PolicyV3TestCase):
             for relative, content in expected.items():
                 target = sandbox / relative
                 target.parent.mkdir(parents=True, exist_ok=True)
-                target.write_text(content, encoding="utf-8")
+                target.write_bytes(content.encode("utf-8"))
             first = next(iter(expected))
             (sandbox / first).write_text("stale\n", encoding="utf-8")
             self.assertEqual(renderer.detect_drift(sandbox, expected), [first.as_posix()])
