@@ -2,7 +2,7 @@
 name: memory-gate
 description: "Protect persistent memory with proposal, hash, quarantine, and human approval rails."
 ---
-<!-- GENERATED; policy_id=P03; source=policy-v3/fragments/memory-gate.md; source_sha256=e59fe73eda315c6c8435bd2c77625ea836885cec64265eb77a5c3288d9cc2a47; registry_sha256=774f226f2600847405f2d0c038583e051108693286dad5a72490d793332a10ec -->
+<!-- GENERATED; policy_id=P03; source=policy-v3/fragments/memory-gate.md; source_sha256=e59fe73eda315c6c8435bd2c77625ea836885cec64265eb77a5c3288d9cc2a47; registry_sha256=a0f339fcdd0ef7577e2f20f614ca1a2c3408ca5591f3bd3690710a9b3963e1a9 -->
 
 # Persistent Memory Gate
 
