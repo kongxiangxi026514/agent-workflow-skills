@@ -1,7 +1,21 @@
 import json, os, shutil, subprocess, tempfile, unittest
 from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
-SKILLS = ("code-review", "first-principles", "memory-gate", "parallel-dispatch", "research-routing")
+SKILLS = (
+    "code-review",
+    "first-principles",
+    "memory-gate",
+    "parallel-dispatch",
+    "research-routing",
+)
+V3_SKILLS = (
+    "code-review",
+    "first-principles",
+    "memory-gate",
+    "parallel-dispatch",
+    "research-routing",
+    "workflow-lifecycle",
+)
 PS = shutil.which("powershell") or shutil.which("pwsh")
 BASH = shutil.which("bash")
 MODELS = ("-BuildModel", "acme/terra", "-ReasonModel", "acme/sol", "-ReviewModel", "other/glm")
@@ -87,9 +101,11 @@ class InstallerTests(unittest.TestCase):
         self.assertEqual(agents.read_text(encoding="utf-8").count("BEGIN agent-workflow-skills spine"), 1)
         self.assertFalse(agents.read_bytes().startswith(b"\xef\xbb\xbf"))
         self.assert_agents()
-        for skill in SKILLS:
-            for root in (self.home / ".cursor/skills", self.opencode / "skills", self.home / ".claude/skills"):
+        for skill in V3_SKILLS:
+            for root in (self.home / ".cursor/skills", self.opencode / "skills"):
                 self.assertTrue((root / skill / "SKILL.md").is_file())
+        for skill in SKILLS:
+            self.assertTrue((self.home / ".claude/skills" / skill / "SKILL.md").is_file())
         self.assertTrue((self.project / ".cursor/rules/workflow-gate.mdc").is_file())
         self.assertTrue((self.project / ".cursor/rules/model-routing.mdc").is_file())
         self.assertFalse(self.binding.read_bytes().startswith(b"\xef\xbb\xbf"))
@@ -104,6 +120,37 @@ class InstallerTests(unittest.TestCase):
         self.assertFalse((self.opencode / "agents/build.md").exists())
         self.assertFalse((self.opencode / "agents/reason.md").exists())
         self.assertFalse(self.binding.exists())
+
+    def test_v3_profile_defaults_are_platform_specific_and_owned(self):
+        self.assertEqual(
+            self.invoke("install.ps1", "all", "-Project", str(self.project), *MODELS).returncode,
+            0,
+        )
+        cursor_rule = self.project / ".cursor/rules/workflow-gate.mdc"
+        opencode_spine = self.opencode / "AGENTS.md"
+        self.assertIn("profile=lean", cursor_rule.read_text(encoding="utf-8"))
+        self.assertIn("profile=balanced", opencode_spine.read_text(encoding="utf-8"))
+        for state_path, expected_profile in (
+            (self.project / ".cursor/agent-workflow-skills/install-state.json", "lean"),
+            (self.opencode / "agent-workflow-skills/install-state.json", "balanced"),
+        ):
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+            self.assertEqual(state["profile"], expected_profile)
+            self.assertIn("workflow-gate.mdc", state["policy_owned_sha256"])
+        skill = self.opencode / "skills/workflow-lifecycle/SKILL.md"
+        self.assertIn("GENERATED; policy_id=P01", skill.read_text(encoding="utf-8"))
+
+    def test_hand_edited_owned_profile_adapter_fails_before_refresh(self):
+        args = ("-Project", str(self.project), *MODELS)
+        self.assertEqual(self.invoke("install.ps1", "cursor", *args).returncode, 0)
+        rule = self.project / ".cursor/rules/workflow-gate.mdc"
+        rule.write_text("manual edit\n", encoding="utf-8")
+        before = rule.read_bytes()
+        result = self.invoke("install.ps1", "cursor", *args)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(b"drift", result.stderr.lower())
+        self.assertEqual(rule.read_bytes(), before)
+
     def test_opencode_models_are_required_before_mutation(self):
         for tool, extra in (("opencode", ()), ("all", ("-Project", str(self.project)))):
             result = self.invoke("install.ps1", tool, *extra)

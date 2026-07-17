@@ -38,7 +38,7 @@ remove_skills() {
   # Only remove the skill folders that this bundle ships (never a whole skills dir).
   dest="$1"
   [ -d "$dest" ] || return 0
-  for d in "$REPO_ROOT"/skills/*/; do
+  for d in "$REPO_ROOT"/policy-v3/generated/skills/*/; do
     name="$(basename "$d")"
     if [ -f "$dest/$name/$SKILL_MARKER" ]; then rm -rf "$dest/$name"; fi
   done

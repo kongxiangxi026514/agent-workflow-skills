@@ -20,6 +20,7 @@ param(
     [string]$Tool = 'cursor',
     [string]$Project,
     [string]$OpenCodeConfigDir,
+    [ValidateSet('lean', 'balanced')][string]$Profile,
     [Alias('OpenCodeBuildModel')][string]$BuildModel,
     [Alias('OpenCodeReasonModel')][string]$ReasonModel,
     [Alias('OpenCodeReviewModel')][string]$ReviewModel
@@ -69,18 +70,33 @@ function Resolve-Python {
     throw 'A runnable Python 3 interpreter is required to validate and stage model bindings.'
 }
 
-function New-InstallStage([string]$Binding) {
+function Get-Profile([string]$Platform) {
+    if ($Profile) { return $Profile }
+    if ($Platform -eq 'cursor') { return 'lean' }
+    return 'balanced'
+}
+
+function New-InstallStage([string]$Binding, [string]$Platform, [string]$InstallProfile) {
     $stage = Join-Path ([IO.Path]::GetTempPath()) "agent-workflow-$([guid]::NewGuid().ToString('N'))"
     $python = Resolve-Python
     $build = if ($BuildModel) { $BuildModel } else { '-' }
     $reason = if ($ReasonModel) { $ReasonModel } else { '-' }
     $review = if ($ReviewModel) { $ReviewModel } else { '-' }
-    & $python (Join-Path $RepoRoot 'tools\prepare_install.py') $stage $Binding $build $reason $review | Out-Null
+    & $python (Join-Path $RepoRoot 'tools\prepare_install.py') $stage $Binding $Platform $InstallProfile $build $reason $review | Out-Null
     if ($LASTEXITCODE -ne 0) {
         if (Test-Path $stage) { Remove-Item -Recurse -Force $stage }
         throw "Model binding validation failed. Nothing was installed."
     }
     return $stage
+}
+
+function Test-PolicyArtifactOwnership([string]$State, [string]$Adapter, [string]$Skills, [bool]$Spine) {
+    if (-not (Test-Path -LiteralPath $State)) { return }
+    $python = Resolve-Python
+    $args = @((Join-Path $RepoRoot 'tools\verify_install_state.py'), '--state', $State, '--adapter', $Adapter, '--skills', $Skills)
+    if ($Spine) { $args += '--spine' }
+    & $python @args | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "Generated policy drift detected. Nothing was installed." }
 }
 
 function Test-SpineMarkerIntegrity([string]$File) {
@@ -113,7 +129,7 @@ function Test-OpenCodeConfig {
 }
 
 function Test-SkillOwnership([string]$DestSkillsDir) {
-    Get-ChildItem -Directory -LiteralPath (Join-Path $RepoRoot 'skills') | ForEach-Object {
+    Get-ChildItem -Directory -LiteralPath (Join-Path $RepoRoot 'policy-v3\generated\skills') | ForEach-Object {
         $dest = Join-Path $DestSkillsDir $_.Name
         if ((Test-Path $dest) -and -not (Test-Path (Join-Path $dest $SkillMarker))) {
             throw "Skill already exists and is not bundle-owned: $dest. Nothing was installed."
@@ -137,16 +153,16 @@ function Set-BundleState([string]$Dir, [string]$Stage) {
     Copy-Item -Force (Join-Path $Stage 'install-state.json') (Join-Path $Dir 'install-state.json')
 }
 
-function Get-SpineBody {
-    # Read rules/workflow-gate.mdc and strip the leading --- ... --- frontmatter.
-    $raw = Read-Utf8 (Join-Path $RepoRoot 'rules\workflow-gate.mdc')
+function Get-SpineBody([string]$Source) {
+    # Strip optional Cursor frontmatter before inserting the OpenCode marker block.
+    $raw = Read-Utf8 $Source
     $body = [regex]::Replace($raw, '^---\r?\n.*?\r?\n---\r?\n', '', [System.Text.RegularExpressions.RegexOptions]::Singleline)
     return $body.Trim()
 }
 
-function Set-SpineBlock([string]$File) {
+function Set-SpineBlock([string]$File, [string]$Source) {
     # Idempotently place the spine between markers: replace the block if markers exist, else append.
-    $body = Get-SpineBody
+    $body = Get-SpineBody $Source
     $block = "$BeginMarker`n$body`n$EndMarker"
     if (Test-Path $File) {
         $content = Read-Utf8 $File
@@ -190,7 +206,7 @@ function Install-OpenCode {
     Copy-Skills $skillsDir (Join-Path $script:OpenCodeStage 'skills')
     $summary.Add("opencode: skills -> $skillsDir")
     $agents = Join-Path $base 'AGENTS.md'
-    Set-SpineBlock $agents
+    Set-SpineBlock $agents (Join-Path $script:OpenCodeStage 'workflow-gate.mdc')
     $summary.Add("opencode: spine injected -> $agents (marker block)")
     $agentDir = Join-Path $base 'agents'
     if (-not (Test-Path $agentDir)) { New-Item -ItemType Directory -Path $agentDir -Force | Out-Null }
@@ -210,7 +226,7 @@ function Install-Claude {
     Copy-Skills $skillsDir
     $summary.Add("claude: skills -> $skillsDir")
     $claudeMd = Join-Path $base 'CLAUDE.md'
-    Set-SpineBlock $claudeMd
+    Set-SpineBlock $claudeMd (Join-Path $RepoRoot 'rules\workflow-gate.mdc')
     $summary.Add("claude: spine injected -> $claudeMd (marker block)")
 }
 
@@ -219,21 +235,25 @@ if (($Tool -eq 'cursor' -or $Tool -eq 'all') -and -not $Project) {
 }
 if ($Tool -eq 'opencode' -or $Tool -eq 'all') {
     $script:OpenCodeConfig = Test-OpenCodeConfig
-    Test-SpineMarkerIntegrity (Join-Path $OpenCodeBase 'AGENTS.md')
-    $script:OpenCodeStage = New-InstallStage (Join-Path $OpenCodeBase 'agent-workflow-skills\model-routing.jsonc')
+    $opencodeSpine = Join-Path $OpenCodeBase 'AGENTS.md'
+    $opencodeState = Join-Path $OpenCodeBase 'agent-workflow-skills\install-state.json'
+    Test-SpineMarkerIntegrity $opencodeSpine
+    Test-PolicyArtifactOwnership $opencodeState $opencodeSpine (Join-Path $OpenCodeBase 'skills') $true
+    $script:OpenCodeStage = New-InstallStage (Join-Path $OpenCodeBase 'agent-workflow-skills\model-routing.jsonc') 'opencode' (Get-Profile 'opencode')
 }
 if ($Tool -eq 'cursor' -or $Tool -eq 'all') {
     $cursorState = Join-Path $Project '.cursor\agent-workflow-skills\install-state.json'
     $cursorBinding = Join-Path $Project '.cursor\agent-workflow-skills\model-routing.jsonc'
     if ((Test-Path $cursorBinding) -and -not (Test-Path $cursorState)) { throw "Cursor model binding exists without bundle ownership. Nothing was installed." }
     Test-SkillOwnership (Join-Path $env:USERPROFILE '.cursor\skills')
+    Test-PolicyArtifactOwnership $cursorState (Join-Path $Project '.cursor\rules\workflow-gate.mdc') (Join-Path $env:USERPROFILE '.cursor\skills') $false
     foreach ($name in @('workflow-gate.mdc', 'model-routing.mdc')) {
         $rule = Join-Path $Project ".cursor\rules\$name"
         if ((Test-Path $rule) -and -not (Read-Utf8 $rule).Contains('Managed by agent-workflow-skills')) {
             throw "Cursor rule already exists and is not bundle-owned: $rule. Nothing was installed."
         }
     }
-    $script:CursorStage = New-InstallStage $cursorBinding
+    $script:CursorStage = New-InstallStage $cursorBinding 'cursor' (Get-Profile 'cursor')
 }
 if ($Tool -eq 'claude' -or $Tool -eq 'all') {
     Test-SpineMarkerIntegrity (Join-Path $env:USERPROFILE '.claude\CLAUDE.md')

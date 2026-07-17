@@ -1,6 +1,13 @@
 # 安装 / 幂等性 / 卸载
 
-本仓库 = **5 个按需 skill**(`skills/`)+ **1 个强制常驻脊柱规则**(`rules/workflow-gate.mdc`,`alwaysApply: true`)+ 模型路由单点配置。安装/卸载全部走脚本,**不再手动拷贝任何文件**。
+本仓库的 v3 安装包由 `policy-v3/registry.json`、唯一 fragments 与 renderer 生成；安装/卸载全部走脚本,**不再手动拷贝任何文件**。模型 ID 仍只放在目标机器的 binding。
+
+## Profile 行为
+
+- Cursor 默认 `lean`，OpenCode 默认 `balanced`；可用 PowerShell `-Profile lean|balanced` 或 bash `--profile lean|balanced` 覆盖。
+- `lean` 与 `balanced` 只改变 R0/R1 升级阈值和 L0/capsule budget，绝不维护两套 policy 正文。
+- R2 Strict 触发、`P01,P04` 加载与独立审查在两个 profile 中相同。
+- 生成的 adapter/skills 写入 fragment ID/hash、registry hash、profile 与 ownership manifest。下一次 install 会在任何写入前检查 drift，手改受管生成物会 fail-loud。
 
 ## 组成
 
@@ -30,6 +37,8 @@
 
    ```powershell
    .\install.ps1 -Tool cursor -Project D:\path\to\your-repo -BuildModel provider/build-id -ReviewModel other/review-id
+   # 默认 lean；需要时显式改为 balanced
+   .\install.ps1 -Tool cursor -Project D:\path\to\your-repo -Profile balanced -BuildModel provider/build-id -ReviewModel other/review-id
    ```
 
    - `skills/*` → `%USERPROFILE%\.cursor\skills\<skill>\SKILL.md`(覆盖式,自动建目录),Cursor 按 `description` 自动发现调用。
@@ -56,6 +65,9 @@
 
 ```bash
 ./install.sh --tool opencode \
+  --build-model provider/build-id --review-model other/review-id
+# 默认 balanced；需要时显式改为 lean
+./install.sh --tool opencode --profile lean \
   --build-model provider/build-id --review-model other/review-id
 ```
 
@@ -105,6 +117,13 @@
 - `-Project` 给定时删掉 `<repo>\.cursor\rules\workflow-gate.mdc`。
 - `opencode.json` / `opencode.jsonc` **不会被修改或删除**。
 - 已不存在的项直接跳过,不报错。
+
+## 从 installer-v2 迁移
+
+1. 不要复制/合并旧 AGENTS、rule 或 skill，也不要删除现有 `model-routing.jsonc` / ownership state。
+2. 使用含 `policy-v3/generated/` 的版本直接重跑 install；bundle-owned v2 资产会在 staging 校验后替换为 v3，OpenCode 主配置仍逐字节不变。
+3. 记录默认 profile（Cursor `lean`、OpenCode `balanced`）；若需要统一行为，显式传 `Profile`，然后重启 OpenCode。
+4. 若 drift 检查报错，先审阅受管生成物是否被手改；要回到受支持状态时运行对应 uninstall 后重装，禁止通过删除 state/marker 绕过检查。
 
 ## 验证已生效
 

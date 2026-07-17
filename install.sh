@@ -10,6 +10,7 @@ set -euo pipefail
 TOOL="cursor"
 PROJECT=""
 OPENCODE_CONFIG_DIR=""
+PROFILE=""
 OPENCODE_BUILD_MODEL="${AGENT_WORKFLOW_OPENCODE_BUILD_MODEL:-}"
 OPENCODE_REASON_MODEL="${AGENT_WORKFLOW_OPENCODE_REASON_MODEL:-}"
 OPENCODE_REVIEW_MODEL="${AGENT_WORKFLOW_OPENCODE_REVIEW_MODEL:-}"
@@ -22,6 +23,8 @@ while [ $# -gt 0 ]; do
     --project=*) PROJECT="${1#*=}"; shift ;;
     --opencode-config-dir) OPENCODE_CONFIG_DIR="${2:-}"; shift 2 ;;
     --opencode-config-dir=*) OPENCODE_CONFIG_DIR="${1#*=}"; shift ;;
+    --profile) PROFILE="${2:-}"; shift 2 ;;
+    --profile=*) PROFILE="${1#*=}"; shift ;;
     --build-model|--opencode-build-model) OPENCODE_BUILD_MODEL="${2:-}"; shift 2 ;;
     --build-model=*|--opencode-build-model=*) OPENCODE_BUILD_MODEL="${1#*=}"; shift ;;
     --reason-model|--opencode-reason-model) OPENCODE_REASON_MODEL="${2:-}"; shift 2 ;;
@@ -57,13 +60,29 @@ resolve_python() {
 }
 
 new_install_stage() {
-  binding="$1"; stage="$(mktemp -d)"
+  binding="$1"; platform="$2"; profile="$3"; stage="$(mktemp -d)"
   python_cmd="$(resolve_python)"
   if ! "$python_cmd" "$REPO_ROOT/tools/prepare_install.py" "$stage" "$binding" \
-    "${OPENCODE_BUILD_MODEL:--}" "${OPENCODE_REASON_MODEL:--}" "${OPENCODE_REVIEW_MODEL:--}" >/dev/null; then
+    "$platform" "$profile" "${OPENCODE_BUILD_MODEL:--}" "${OPENCODE_REASON_MODEL:--}" "${OPENCODE_REVIEW_MODEL:--}" >/dev/null; then
     rm -rf "$stage"; return 1
   fi
   printf '%s\n' "$stage"
+}
+
+profile_for() {
+  if [ -n "$PROFILE" ]; then printf '%s\n' "$PROFILE"
+  elif [ "$1" = cursor ]; then printf 'lean\n'
+  else printf 'balanced\n'; fi
+}
+
+verify_policy_ownership() {
+  state="$1"; adapter="$2"; skills="$3"; spine="$4"
+  [ ! -f "$state" ] && return 0
+  python_cmd="$(resolve_python)"
+  args=(--state "$state" --adapter "$adapter" --skills "$skills")
+  [ "$spine" = 1 ] && args+=(--spine)
+  "$python_cmd" "$REPO_ROOT/tools/verify_install_state.py" "${args[@]}" ||
+    { echo "Generated policy drift detected. Nothing was installed." >&2; return 1; }
 }
 
 assert_spine_markers() {
@@ -98,7 +117,7 @@ preflight_opencode() {
 
 preflight_skills() {
   dest="$1"
-  for d in "$REPO_ROOT"/skills/*/; do
+  for d in "$REPO_ROOT"/policy-v3/generated/skills/*/; do
     target="$dest/$(basename "$d")"
     if [ -d "$target" ] && [ ! -f "$target/$SKILL_MARKER" ]; then
       echo "Skill already exists and is not bundle-owned: $target. Nothing was installed." >&2; return 1
@@ -118,12 +137,13 @@ copy_skills() {
 }
 
 spine_body() {
-  # Print rules/workflow-gate.mdc with the leading --- ... --- frontmatter stripped.
+  # Print an adapter with its optional Cursor frontmatter stripped.
   awk '
     NR==1 && $0=="---" { fm=1; next }
+    NR==1 { fm=2 }
     fm==1 && $0=="---" { fm=2; next }
     fm==2 { print }
-  ' "$REPO_ROOT/rules/workflow-gate.mdc" | sed '/./,$!d'
+  ' "$1" | sed '/./,$!d'
 }
 
 set_spine_block() {
@@ -141,7 +161,7 @@ set_spine_block() {
   {
     if [ -s "$tmp" ]; then printf '\n'; fi
     printf '%s\n' "$BEGIN_MARKER"
-    spine_body
+    spine_body "$2"
     printf '%s\n' "$END_MARKER"
   } >> "$tmp"
   mv -f "$tmp" "$file"
@@ -174,7 +194,7 @@ install_opencode() {
   base="$OPENCODE_BASE"
   copy_skills "$base/skills" "$OPENCODE_STAGE/skills"
   SUMMARY+=("opencode: skills -> $base/skills")
-  set_spine_block "$base/AGENTS.md"
+  set_spine_block "$base/AGENTS.md" "$OPENCODE_STAGE/workflow-gate.mdc"
   SUMMARY+=("opencode: spine injected -> $base/AGENTS.md (marker block)")
   mkdir -p "$base/agents"
   cp -f "$OPENCODE_STAGE"/agents/*.md "$base/agents/"
@@ -190,7 +210,7 @@ install_claude() {
   base="$HOME/.claude"
   copy_skills "$base/skills"
   SUMMARY+=("claude: skills -> $base/skills")
-  set_spine_block "$base/CLAUDE.md"
+  set_spine_block "$base/CLAUDE.md" "$REPO_ROOT/rules/workflow-gate.mdc"
   SUMMARY+=("claude: spine injected -> $base/CLAUDE.md (marker block)")
 }
 
@@ -201,20 +221,22 @@ fi
 if [ "$TOOL" = opencode ] || [ "$TOOL" = all ]; then
   preflight_opencode
   assert_spine_markers "$OPENCODE_BASE/AGENTS.md"
-  OPENCODE_STAGE="$(new_install_stage "$OPENCODE_BASE/agent-workflow-skills/model-routing.jsonc")"
+  verify_policy_ownership "$OPENCODE_BASE/agent-workflow-skills/install-state.json" "$OPENCODE_BASE/AGENTS.md" "$OPENCODE_BASE/skills" 1
+  OPENCODE_STAGE="$(new_install_stage "$OPENCODE_BASE/agent-workflow-skills/model-routing.jsonc" opencode "$(profile_for opencode)")"
 fi
 if [ "$TOOL" = cursor ] || [ "$TOOL" = all ]; then
   state="$PROJECT/.cursor/agent-workflow-skills/install-state.json"
   binding="$PROJECT/.cursor/agent-workflow-skills/model-routing.jsonc"
   if [ -f "$binding" ] && [ ! -f "$state" ]; then echo "Cursor model binding exists without bundle ownership." >&2; exit 1; fi
     preflight_skills "$HOME/.cursor/skills"
+  verify_policy_ownership "$state" "$PROJECT/.cursor/rules/workflow-gate.mdc" "$HOME/.cursor/skills" 0
   for rule in workflow-gate.mdc model-routing.mdc; do
     path="$PROJECT/.cursor/rules/$rule"
     if [ -f "$path" ] && ! grep -Fq 'Managed by agent-workflow-skills' "$path"; then
       echo "Cursor rule already exists and is not bundle-owned: $path" >&2; exit 1
     fi
   done
-  CURSOR_STAGE="$(new_install_stage "$binding")"
+  CURSOR_STAGE="$(new_install_stage "$binding" cursor "$(profile_for cursor)")"
 fi
 if [ "$TOOL" = claude ] || [ "$TOOL" = all ]; then assert_spine_markers "$HOME/.claude/CLAUDE.md"; fi
 
