@@ -44,12 +44,36 @@ class PublicDocumentationTests(unittest.TestCase):
 
     def test_documented_flags_and_binding_path_match_installers(self):
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        install = (ROOT / "INSTALL.md").read_text(encoding="utf-8")
         install_ps1 = (ROOT / "install.ps1").read_text(encoding="utf-8")
         install_sh = (ROOT / "install.sh").read_text(encoding="utf-8")
         self.assertIn(".cursor\\agent-workflow-skills\\model-routing.jsonc", readme)
-        self.assertIn("$OpenCodeConfigDir", install_ps1)
-        self.assertIn("--opencode-config-dir", install_sh)
-        self.assertIn("--opencode-config-dir", readme)
+        for flag in ("-Tool", "-Project", "-Profile", "-OpenCodeConfigDir"):
+            self.assertIn(flag, install)
+            self.assertIn(f"${flag[1:]}", install_ps1)
+        for flag in ("--tool", "--project", "--profile", "--opencode-config-dir"):
+            self.assertIn(flag, install)
+            self.assertIn(flag, install_sh)
+
+    def test_install_lists_all_generated_skills_from_canonical_source(self):
+        install = (ROOT / "INSTALL.md").read_text(encoding="utf-8")
+        generated = ROOT / "policy-v3" / "generated" / "skills"
+        skills = {path.name for path in generated.iterdir() if path.is_dir()}
+        self.assertEqual(
+            skills,
+            {
+                "code-review",
+                "first-principles",
+                "memory-gate",
+                "parallel-dispatch",
+                "research-routing",
+                "workflow-lifecycle",
+            },
+        )
+        self.assertIn("`policy-v3/generated/skills/`", install)
+        for skill in skills:
+            self.assertIn(f"`{skill}`", install)
+        self.assertNotIn("`skills/*`", install)
 
 
 if __name__ == "__main__":

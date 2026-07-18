@@ -14,12 +14,7 @@
 | 路径 | 类型 | 角色 |
 | --- | --- | --- |
 | `rules/workflow-gate.mdc` | **强制规则** | 脊柱:每轮 A/B/C/D 门控 + 主/子编排 + 全流程 + 质量/架构契约 + 模型路由 + 元认知检查点 |
-| `skills/first-principles/` | 按需 skill | 第一性原理拆解:难/新/模糊问题拆到不可再分、从零推导 + 元认知收尾 |
-| `skills/code-review/` | 按需 skill | 分层 7 层审查 + no-false-negative 复验 + 瘦身/重构纪律;对抗式审查(高风险时叠加) |
-| `skills/research-routing/` | 按需 skill | Context7 / Tavily / GitHub 调研路由 |
-| `skills/parallel-dispatch/` | 按需 skill | 并行 vs 串行拆解 + 角色化模型路由(引用单点)+ 上下文封顶/熔断 |
-| `skills/memory-gate/` | 按需 skill | AGENTS.md 记忆更新 diff-review 双轨 gate |
-| `policy-v3/generated/skills/workflow-lifecycle/` | 按需 skill | R1/R2 discovery、TDD、验收与 closeout |
+| `policy-v3/generated/skills/` | 6 个按需 skills | `workflow-lifecycle`、`first-principles`、`code-review`、`research-routing`、`parallel-dispatch`、`memory-gate` |
 | `config/model-routing.jsonc` | 模板 | build/reason/review 的无默认 provider binding 格式 |
 | `opencode/agents/{build,reason,review}.md` | 配置 | OpenCode 原生三角色 agent;不写用户主配置 |
 
@@ -48,7 +43,7 @@ Cursor binding 位于 `<project>/.cursor/agent-workflow-skills/model-routing.jso
    .\install.ps1 -Tool cursor -Project D:\path\to\your-repo -Profile balanced -BuildModel cursor-build-slug -ReviewModel cursor-review-slug
    ```
 
-   - `skills/*` → `%USERPROFILE%\.cursor\skills\<skill>\SKILL.md`(覆盖式,自动建目录),Cursor 按 `description` 自动发现调用。
+   - `policy-v3/generated/skills/` → `%USERPROFILE%\.cursor\skills\<skill>\SKILL.md`(覆盖式,自动建目录),Cursor 按 `description` 自动发现调用。
    - `rules/workflow-gate.mdc` 与渲染后的 model adapter → `<repo>\.cursor\rules\`;binding → `<repo>\.cursor\agent-workflow-skills\model-routing.jsonc`。
 
 2. 不带 `-Project` 会在任何写入前失败,避免只装 skill 却遗漏强制脊柱。Cursor 没有文件式跨项目全局规则;对每个项目执行脚本即可全自动安装。
@@ -57,10 +52,10 @@ Cursor binding 位于 `<project>/.cursor/agent-workflow-skills/model-routing.jso
 
 | 工具 | 仓库来源 | 自动目标 |
 | --- | --- | --- |
-| Cursor | `skills/*` | `%USERPROFILE%\.cursor\skills\<skill>\` / `~/.cursor/skills/<skill>/` |
+| Cursor | `policy-v3/generated/skills/`（6 个） | `%USERPROFILE%\.cursor\skills\<skill>\` / `~/.cursor/skills/<skill>/` |
 | Cursor(带 Project) | `rules/workflow-gate.mdc` | `<project>/.cursor/rules/workflow-gate.mdc` |
 | Cursor(带 Project) | binding + resolver + adapter template | `<project>/.cursor/agent-workflow-skills/{model-routing.jsonc,dispatch_resolver.py}` + `.cursor/rules/model-routing.mdc` |
-| OpenCode | `skills/*` | `~/.config/opencode/skills/<skill>/` |
+| OpenCode | `policy-v3/generated/skills/`（6 个） | `~/.config/opencode/skills/<skill>/` |
 | OpenCode | `rules/workflow-gate.mdc` | `~/.config/opencode/AGENTS.md` 标记块 |
 | OpenCode | `opencode/agents/{build,reason,review}.md` | `~/.config/opencode/agents/{build,reason,review}.md` |
 | OpenCode | binding + resolver + ownership state | `~/.config/opencode/agent-workflow-skills/{model-routing.jsonc,dispatch_resolver.py,install-state.json}` |
@@ -78,7 +73,7 @@ Cursor binding 位于 `<project>/.cursor/agent-workflow-skills/model-routing.jso
   --build-model provider/build-id --review-model other/review-id
 ```
 
-- `skills/*` → `~/.config/opencode/skills/<skill>/SKILL.md`。
+- `policy-v3/generated/skills/` → `~/.config/opencode/skills/<skill>/SKILL.md`。
 - 脊柱正文(已剥离 `.mdc` frontmatter)幂等注入 `~/.config/opencode/AGENTS.md`(全局始终加载),用 `<!-- BEGIN agent-workflow-skills spine -->` / `<!-- END agent-workflow-skills spine -->` 标记块包裹。
 - 首次安装用 CLI 明确给 `build` 与 `review`;`reason` 省略即以 JSONC `null` 复用 build。之后编辑 `<config-dir>/agent-workflow-skills/model-routing.jsonc` 并重跑,三个 OpenCode agent 自动刷新;review 保持 `edit: deny`。
 - 默认 config dir 是字面 `~/.config/opencode`;覆盖参数同时适用于 install/uninstall。`opencode.json` 和 `opencode.jsonc` 从不读取或改写,双文件、注释、未知字段、损坏内容均逐字节保留。
