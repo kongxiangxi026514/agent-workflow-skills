@@ -77,7 +77,11 @@ uninstall_cursor() {
     for rule in "$dest" "$PROJECT/.cursor/rules/model-routing.mdc"; do
       if [ -f "$rule" ] && grep -Fq 'Managed by agent-workflow-skills' "$rule"; then rm -f "$rule"; fi
     done
-    if [ "$owned" = 1 ]; then rm -f "$PROJECT/.cursor/agent-workflow-skills/model-routing.jsonc" "$state"; fi
+    if [ "$owned" = 1 ]; then
+      rm -f "$PROJECT/.cursor/agent-workflow-skills/model-routing.jsonc" \
+        "$PROJECT/.cursor/agent-workflow-skills/dispatch_resolver.py" \
+        "$PROJECT/.cursor/agent-workflow-skills/validate_jsonc.py" "$state"
+    fi
     SUMMARY+=("cursor: processed spine rule $dest (removed only when bundle-owned)")
   fi
 }
@@ -93,7 +97,11 @@ uninstall_opencode() {
     if [ -f "$agent" ] && grep -Fq "$AGENT_MARKER" "$agent"; then rm -f "$agent"; fi
   done
   SUMMARY+=("opencode: processed native agents in $base/agents (removed only when bundle-owned; main config untouched)")
-  if [ "$owned" = 1 ]; then rm -f "$base/agent-workflow-skills/model-routing.jsonc" "$state"; fi
+  if [ "$owned" = 1 ]; then
+    rm -f "$base/agent-workflow-skills/model-routing.jsonc" \
+      "$base/agent-workflow-skills/dispatch_resolver.py" \
+      "$base/agent-workflow-skills/validate_jsonc.py" "$state"
+  fi
 }
 
 uninstall_claude() {

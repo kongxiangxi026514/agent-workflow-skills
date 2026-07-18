@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Install the agent-workflow-skills bundle (5 on-demand skills + 1 forced always-on spine rule)
+# Install the agent-workflow-skills bundle (6 on-demand skills + 1 forced always-on spine rule)
 # into a tool's config dir. Idempotent: re-running does not duplicate content.
 #
 # Usage:
@@ -12,6 +12,12 @@ PROJECT=""
 OPENCODE_CONFIG_DIR=""
 PROFILE=""
 PROFILE_SET=0
+GENERIC_BUILD_MODEL=""
+GENERIC_REASON_MODEL=""
+GENERIC_REVIEW_MODEL=""
+CURSOR_BUILD_MODEL="${AGENT_WORKFLOW_CURSOR_BUILD_MODEL:-}"
+CURSOR_REASON_MODEL="${AGENT_WORKFLOW_CURSOR_REASON_MODEL:-}"
+CURSOR_REVIEW_MODEL="${AGENT_WORKFLOW_CURSOR_REVIEW_MODEL:-}"
 OPENCODE_BUILD_MODEL="${AGENT_WORKFLOW_OPENCODE_BUILD_MODEL:-}"
 OPENCODE_REASON_MODEL="${AGENT_WORKFLOW_OPENCODE_REASON_MODEL:-}"
 OPENCODE_REVIEW_MODEL="${AGENT_WORKFLOW_OPENCODE_REVIEW_MODEL:-}"
@@ -26,18 +32,44 @@ while [ $# -gt 0 ]; do
     --opencode-config-dir=*) OPENCODE_CONFIG_DIR="${1#*=}"; shift ;;
     --profile) PROFILE="${2:-}"; PROFILE_SET=1; shift 2 ;;
     --profile=*) PROFILE="${1#*=}"; PROFILE_SET=1; shift ;;
-    --build-model|--opencode-build-model) OPENCODE_BUILD_MODEL="${2:-}"; shift 2 ;;
-    --build-model=*|--opencode-build-model=*) OPENCODE_BUILD_MODEL="${1#*=}"; shift ;;
-    --reason-model|--opencode-reason-model) OPENCODE_REASON_MODEL="${2:-}"; shift 2 ;;
-    --reason-model=*|--opencode-reason-model=*) OPENCODE_REASON_MODEL="${1#*=}"; shift ;;
-    --review-model|--opencode-review-model) OPENCODE_REVIEW_MODEL="${2:-}"; shift 2 ;;
-    --review-model=*|--opencode-review-model=*) OPENCODE_REVIEW_MODEL="${1#*=}"; shift ;;
+    --build-model) GENERIC_BUILD_MODEL="${2:-}"; shift 2 ;;
+    --build-model=*) GENERIC_BUILD_MODEL="${1#*=}"; shift ;;
+    --reason-model) GENERIC_REASON_MODEL="${2:-}"; shift 2 ;;
+    --reason-model=*) GENERIC_REASON_MODEL="${1#*=}"; shift ;;
+    --review-model) GENERIC_REVIEW_MODEL="${2:-}"; shift 2 ;;
+    --review-model=*) GENERIC_REVIEW_MODEL="${1#*=}"; shift ;;
+    --cursor-build-model) CURSOR_BUILD_MODEL="${2:-}"; shift 2 ;;
+    --cursor-build-model=*) CURSOR_BUILD_MODEL="${1#*=}"; shift ;;
+    --cursor-reason-model) CURSOR_REASON_MODEL="${2:-}"; shift 2 ;;
+    --cursor-reason-model=*) CURSOR_REASON_MODEL="${1#*=}"; shift ;;
+    --cursor-review-model) CURSOR_REVIEW_MODEL="${2:-}"; shift 2 ;;
+    --cursor-review-model=*) CURSOR_REVIEW_MODEL="${1#*=}"; shift ;;
+    --opencode-build-model) OPENCODE_BUILD_MODEL="${2:-}"; shift 2 ;;
+    --opencode-build-model=*) OPENCODE_BUILD_MODEL="${1#*=}"; shift ;;
+    --opencode-reason-model) OPENCODE_REASON_MODEL="${2:-}"; shift 2 ;;
+    --opencode-reason-model=*) OPENCODE_REASON_MODEL="${1#*=}"; shift ;;
+    --opencode-review-model) OPENCODE_REVIEW_MODEL="${2:-}"; shift 2 ;;
+    --opencode-review-model=*) OPENCODE_REVIEW_MODEL="${1#*=}"; shift ;;
     -h|--help)
       grep '^#' "$0" | sed 's/^# \{0,1\}//'
       exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 1 ;;
   esac
 done
+
+if [ "$TOOL" = all ] && { [ -n "$GENERIC_BUILD_MODEL" ] || [ -n "$GENERIC_REASON_MODEL" ] || [ -n "$GENERIC_REVIEW_MODEL" ]; }; then
+  echo "generic model options are ambiguous for --tool all; use platform-specific options" >&2
+  exit 1
+fi
+if [ "$TOOL" = cursor ]; then
+  CURSOR_BUILD_MODEL="${CURSOR_BUILD_MODEL:-$GENERIC_BUILD_MODEL}"
+  CURSOR_REASON_MODEL="${CURSOR_REASON_MODEL:-$GENERIC_REASON_MODEL}"
+  CURSOR_REVIEW_MODEL="${CURSOR_REVIEW_MODEL:-$GENERIC_REVIEW_MODEL}"
+elif [ "$TOOL" = opencode ]; then
+  OPENCODE_BUILD_MODEL="${OPENCODE_BUILD_MODEL:-$GENERIC_BUILD_MODEL}"
+  OPENCODE_REASON_MODEL="${OPENCODE_REASON_MODEL:-$GENERIC_REASON_MODEL}"
+  OPENCODE_REVIEW_MODEL="${OPENCODE_REVIEW_MODEL:-$GENERIC_REVIEW_MODEL}"
+fi
 
 if [ "$PROFILE_SET" = 1 ] && [ -z "$PROFILE" ]; then
   echo "--profile requires lean or balanced" >&2
@@ -70,10 +102,10 @@ resolve_python() {
 }
 
 new_install_stage() {
-  binding="$1"; platform="$2"; profile="$3"; stage="$(mktemp -d)"
+  binding="$1"; platform="$2"; profile="$3"; build="$4"; reason="$5"; review="$6"; stage="$(mktemp -d)"
   python_cmd="$(resolve_python)"
   if ! "$python_cmd" "$REPO_ROOT/tools/prepare_install.py" "$stage" "$binding" \
-    "$platform" "$profile" "${OPENCODE_BUILD_MODEL:--}" "${OPENCODE_REASON_MODEL:--}" "${OPENCODE_REVIEW_MODEL:--}" >/dev/null; then
+    "$platform" "$profile" "${build:--}" "${reason:--}" "${review:--}" >/dev/null; then
     rm -rf "$stage"; return 1
   fi
   printf '%s\n' "$stage"
@@ -194,7 +226,8 @@ install_cursor() {
   cp -f "$CURSOR_STAGE/workflow-gate.mdc" "$rules_dir/workflow-gate.mdc"
   cp -f "$CURSOR_STAGE/model-routing.mdc" "$rules_dir/model-routing.mdc"
   mkdir -p "$PROJECT/.cursor/agent-workflow-skills"
-  cp -f "$CURSOR_STAGE/model-routing.jsonc" "$CURSOR_STAGE/install-state.json" "$PROJECT/.cursor/agent-workflow-skills/"
+  cp -f "$CURSOR_STAGE/model-routing.jsonc" "$CURSOR_STAGE/dispatch_resolver.py" \
+    "$CURSOR_STAGE/validate_jsonc.py" "$CURSOR_STAGE/install-state.json" "$PROJECT/.cursor/agent-workflow-skills/"
   SUMMARY+=("cursor: forced always-on spine -> $rules_dir/workflow-gate.mdc (alwaysApply)")
   SUMMARY+=("cursor: project model adapter -> $rules_dir/model-routing.mdc")
   SUMMARY+=("cursor: model binding -> $PROJECT/.cursor/agent-workflow-skills/model-routing.jsonc")
@@ -209,7 +242,8 @@ install_opencode() {
   mkdir -p "$base/agents"
   cp -f "$OPENCODE_STAGE"/agents/*.md "$base/agents/"
   mkdir -p "$base/agent-workflow-skills"
-  cp -f "$OPENCODE_STAGE/model-routing.jsonc" "$OPENCODE_STAGE/install-state.json" "$base/agent-workflow-skills/"
+  cp -f "$OPENCODE_STAGE/model-routing.jsonc" "$OPENCODE_STAGE/dispatch_resolver.py" \
+    "$OPENCODE_STAGE/validate_jsonc.py" "$OPENCODE_STAGE/install-state.json" "$base/agent-workflow-skills/"
   SUMMARY+=("opencode: native agents -> $base/agents/{build,reason,review}.md")
   SUMMARY+=("opencode: model binding -> $base/agent-workflow-skills/model-routing.jsonc")
   config_label="${OPENCODE_CONFIG:-none present; none created}"
@@ -235,7 +269,7 @@ if [ "$TOOL" = opencode ] || [ "$TOOL" = all ]; then
   preflight_opencode
   assert_spine_markers "$OPENCODE_BASE/AGENTS.md"
   verify_policy_ownership "$OPENCODE_BASE/agent-workflow-skills/install-state.json" "$OPENCODE_BASE/AGENTS.md" "$OPENCODE_BASE/skills" 1
-  OPENCODE_STAGE="$(new_install_stage "$OPENCODE_BASE/agent-workflow-skills/model-routing.jsonc" opencode "$(profile_for opencode)")"
+  OPENCODE_STAGE="$(new_install_stage "$OPENCODE_BASE/agent-workflow-skills/model-routing.jsonc" opencode "$(profile_for opencode)" "$OPENCODE_BUILD_MODEL" "$OPENCODE_REASON_MODEL" "$OPENCODE_REVIEW_MODEL")"
 fi
 if [ "$TOOL" = cursor ] || [ "$TOOL" = all ]; then
   state="$PROJECT/.cursor/agent-workflow-skills/install-state.json"
@@ -249,14 +283,14 @@ if [ "$TOOL" = cursor ] || [ "$TOOL" = all ]; then
       echo "Cursor rule already exists and is not bundle-owned: $path" >&2; exit 1
     fi
   done
-  CURSOR_STAGE="$(new_install_stage "$binding" cursor "$(profile_for cursor)")"
+  CURSOR_STAGE="$(new_install_stage "$binding" cursor "$(profile_for cursor)" "$CURSOR_BUILD_MODEL" "$CURSOR_REASON_MODEL" "$CURSOR_REVIEW_MODEL")"
 fi
 if [ "$TOOL" = claude ] || [ "$TOOL" = all ]; then
   CLAUDE_BASE="$HOME/.claude"
   assert_spine_markers "$CLAUDE_BASE/CLAUDE.md"
   preflight_skills "$CLAUDE_BASE/skills"
   verify_policy_ownership "$CLAUDE_BASE/agent-workflow-skills/install-state.json" "$CLAUDE_BASE/CLAUDE.md" "$CLAUDE_BASE/skills" 1
-  CLAUDE_STAGE="$(new_install_stage "$CLAUDE_BASE/agent-workflow-skills/model-routing.jsonc" claude "$(profile_for claude)")"
+  CLAUDE_STAGE="$(new_install_stage "$CLAUDE_BASE/agent-workflow-skills/model-routing.jsonc" claude "$(profile_for claude)" "" "" "")"
 fi
 
 case "$TOOL" in

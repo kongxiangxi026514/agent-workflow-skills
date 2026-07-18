@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-  Install the agent-workflow-skills bundle (5 on-demand skills + 1 forced always-on spine rule)
+  Install the agent-workflow-skills bundle (6 on-demand skills + 1 forced always-on spine rule)
   into a tool's config dir. Idempotent: re-running does not duplicate content.
 
 .PARAMETER Tool
@@ -21,9 +21,15 @@ param(
     [string]$Project,
     [string]$OpenCodeConfigDir,
     [ValidateSet('lean', 'balanced')][string]$Profile,
-    [Alias('OpenCodeBuildModel')][string]$BuildModel,
-    [Alias('OpenCodeReasonModel')][string]$ReasonModel,
-    [Alias('OpenCodeReviewModel')][string]$ReviewModel
+    [string]$BuildModel,
+    [string]$ReasonModel,
+    [string]$ReviewModel,
+    [string]$CursorBuildModel,
+    [string]$CursorReasonModel,
+    [string]$CursorReviewModel,
+    [string]$OpenCodeBuildModel,
+    [string]$OpenCodeReasonModel,
+    [string]$OpenCodeReviewModel
 )
 
 $ErrorActionPreference = 'Stop'
@@ -33,9 +39,25 @@ $EndMarker = '<!-- END agent-workflow-skills spine -->'
 $AgentMarker = '<!-- Managed by agent-workflow-skills. -->'
 $SkillMarker = '.agent-workflow-skills-owned'
 $OpenCodeBase = if ($OpenCodeConfigDir) { $OpenCodeConfigDir } else { Join-Path $env:USERPROFILE '.config\opencode' }
-if (-not $BuildModel) { $BuildModel = $env:AGENT_WORKFLOW_OPENCODE_BUILD_MODEL }
-if (-not $ReasonModel) { $ReasonModel = $env:AGENT_WORKFLOW_OPENCODE_REASON_MODEL }
-if (-not $ReviewModel) { $ReviewModel = $env:AGENT_WORKFLOW_OPENCODE_REVIEW_MODEL }
+if ($Tool -eq 'all' -and ($BuildModel -or $ReasonModel -or $ReviewModel)) {
+    throw 'Generic model options are ambiguous for -Tool all. Use platform-specific Cursor* and OpenCode* options.'
+}
+if ($Tool -eq 'cursor') {
+    if (-not $CursorBuildModel) { $CursorBuildModel = $BuildModel }
+    if (-not $CursorReasonModel) { $CursorReasonModel = $ReasonModel }
+    if (-not $CursorReviewModel) { $CursorReviewModel = $ReviewModel }
+}
+if ($Tool -eq 'opencode') {
+    if (-not $OpenCodeBuildModel) { $OpenCodeBuildModel = $BuildModel }
+    if (-not $OpenCodeReasonModel) { $OpenCodeReasonModel = $ReasonModel }
+    if (-not $OpenCodeReviewModel) { $OpenCodeReviewModel = $ReviewModel }
+}
+if (-not $CursorBuildModel) { $CursorBuildModel = $env:AGENT_WORKFLOW_CURSOR_BUILD_MODEL }
+if (-not $CursorReasonModel) { $CursorReasonModel = $env:AGENT_WORKFLOW_CURSOR_REASON_MODEL }
+if (-not $CursorReviewModel) { $CursorReviewModel = $env:AGENT_WORKFLOW_CURSOR_REVIEW_MODEL }
+if (-not $OpenCodeBuildModel) { $OpenCodeBuildModel = $env:AGENT_WORKFLOW_OPENCODE_BUILD_MODEL }
+if (-not $OpenCodeReasonModel) { $OpenCodeReasonModel = $env:AGENT_WORKFLOW_OPENCODE_REASON_MODEL }
+if (-not $OpenCodeReviewModel) { $OpenCodeReviewModel = $env:AGENT_WORKFLOW_OPENCODE_REVIEW_MODEL }
 $summary = New-Object System.Collections.Generic.List[string]
 $Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 $Utf8Strict = New-Object System.Text.UTF8Encoding($false, $true)
@@ -76,12 +98,12 @@ function Get-Profile([string]$Platform) {
     return 'balanced'
 }
 
-function New-InstallStage([string]$Binding, [string]$Platform, [string]$InstallProfile) {
+function New-InstallStage([string]$Binding, [string]$Platform, [string]$InstallProfile, [string[]]$Models) {
     $stage = Join-Path ([IO.Path]::GetTempPath()) "agent-workflow-$([guid]::NewGuid().ToString('N'))"
     $python = Resolve-Python
-    $build = if ($BuildModel) { $BuildModel } else { '-' }
-    $reason = if ($ReasonModel) { $ReasonModel } else { '-' }
-    $review = if ($ReviewModel) { $ReviewModel } else { '-' }
+    $build = if ($Models[0]) { $Models[0] } else { '-' }
+    $reason = if ($Models[1]) { $Models[1] } else { '-' }
+    $review = if ($Models[2]) { $Models[2] } else { '-' }
     & $python (Join-Path $RepoRoot 'tools\prepare_install.py') $stage $Binding $Platform $InstallProfile $build $reason $review | Out-Null
     if ($LASTEXITCODE -ne 0) {
         if (Test-Path $stage) { Remove-Item -Recurse -Force $stage }
@@ -152,6 +174,10 @@ function Set-BundleState([string]$Dir, [string]$Stage) {
     $binding = Join-Path $Stage 'model-routing.jsonc'
     if (Test-Path $binding) {
         Copy-Item -Force $binding (Join-Path $Dir 'model-routing.jsonc')
+    }
+    foreach ($name in @('dispatch_resolver.py', 'validate_jsonc.py')) {
+        $source = Join-Path $Stage $name
+        if (Test-Path $source) { Copy-Item -Force $source (Join-Path $Dir $name) }
     }
     Copy-Item -Force (Join-Path $Stage 'install-state.json') (Join-Path $Dir 'install-state.json')
 }
@@ -244,7 +270,8 @@ if ($Tool -eq 'opencode' -or $Tool -eq 'all') {
     $opencodeState = Join-Path $OpenCodeBase 'agent-workflow-skills\install-state.json'
     Test-SpineMarkerIntegrity $opencodeSpine
     Test-PolicyArtifactOwnership $opencodeState $opencodeSpine (Join-Path $OpenCodeBase 'skills') $true
-    $script:OpenCodeStage = New-InstallStage (Join-Path $OpenCodeBase 'agent-workflow-skills\model-routing.jsonc') 'opencode' (Get-Profile 'opencode')
+    $models = @($OpenCodeBuildModel, $OpenCodeReasonModel, $OpenCodeReviewModel)
+    $script:OpenCodeStage = New-InstallStage (Join-Path $OpenCodeBase 'agent-workflow-skills\model-routing.jsonc') 'opencode' (Get-Profile 'opencode') $models
 }
 if ($Tool -eq 'cursor' -or $Tool -eq 'all') {
     $cursorState = Join-Path $Project '.cursor\agent-workflow-skills\install-state.json'
@@ -258,7 +285,8 @@ if ($Tool -eq 'cursor' -or $Tool -eq 'all') {
             throw "Cursor rule already exists and is not bundle-owned: $rule. Nothing was installed."
         }
     }
-    $script:CursorStage = New-InstallStage $cursorBinding 'cursor' (Get-Profile 'cursor')
+    $models = @($CursorBuildModel, $CursorReasonModel, $CursorReviewModel)
+    $script:CursorStage = New-InstallStage $cursorBinding 'cursor' (Get-Profile 'cursor') $models
 }
 if ($Tool -eq 'claude' -or $Tool -eq 'all') {
     $claudeBase = Join-Path $env:USERPROFILE '.claude'
@@ -266,7 +294,7 @@ if ($Tool -eq 'claude' -or $Tool -eq 'all') {
     Test-SpineMarkerIntegrity (Join-Path $claudeBase 'CLAUDE.md')
     Test-SkillOwnership (Join-Path $claudeBase 'skills')
     Test-PolicyArtifactOwnership $claudeState (Join-Path $claudeBase 'CLAUDE.md') (Join-Path $claudeBase 'skills') $true
-    $script:ClaudeStage = New-InstallStage (Join-Path $claudeBase 'agent-workflow-skills\model-routing.jsonc') 'claude' (Get-Profile 'claude')
+    $script:ClaudeStage = New-InstallStage (Join-Path $claudeBase 'agent-workflow-skills\model-routing.jsonc') 'claude' (Get-Profile 'claude') @()
 }
 
 try {

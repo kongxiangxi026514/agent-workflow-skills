@@ -19,6 +19,19 @@ V3_SKILLS = (
 PS = shutil.which("powershell") or shutil.which("pwsh")
 BASH = shutil.which("bash")
 MODELS = ("-BuildModel", "acme/terra", "-ReasonModel", "acme/sol", "-ReviewModel", "other/glm")
+CURSOR_MODELS = (
+    "-BuildModel", "gpt-5.6-terra-xhigh",
+    "-ReasonModel", "gpt-5.6-sol-xhigh",
+    "-ReviewModel", "glm-5.2-high",
+)
+PLATFORM_MODELS = (
+    "-CursorBuildModel", "gpt-5.6-terra-xhigh",
+    "-CursorReasonModel", "gpt-5.6-sol-xhigh",
+    "-CursorReviewModel", "glm-5.2-high",
+    "-OpenCodeBuildModel", "huawei/glm5.2",
+    "-OpenCodeReasonModel", "huawei/glm5.2",
+    "-OpenCodeReviewModel", "huawei/kimik2.7",
+)
 class InstallerTests(unittest.TestCase):
     def setUp(self):
         if not PS:
@@ -80,7 +93,7 @@ class InstallerTests(unittest.TestCase):
         agent.write_bytes(b"---\ndescription: user agent\n---\n")
         rule.write_bytes(b"user rule\n")
         before = agent.read_bytes()
-        self.assertNotEqual(self.invoke("install.ps1", "all", "-Project", str(self.project), *MODELS).returncode, 0)
+        self.assertNotEqual(self.invoke("install.ps1", "all", "-Project", str(self.project), *PLATFORM_MODELS).returncode, 0)
         self.assertEqual(agent.read_bytes(), before)
         self.assertFalse((self.home / ".cursor").exists())
         self.assertEqual(self.invoke("uninstall.ps1", "all", "-Project", str(self.project)).returncode, 0)
@@ -89,12 +102,43 @@ class InstallerTests(unittest.TestCase):
     def test_cursor_requires_project_before_mutation(self):
         self.assertNotEqual(self.invoke("install.ps1", "cursor").returncode, 0)
         self.assertFalse((self.home / ".cursor").exists())
+
+    def test_all_uses_isolated_platform_bindings_and_installs_resolver(self):
+        result = self.invoke(
+            "install.ps1", "all", "-Project", str(self.project), *PLATFORM_MODELS
+        )
+        self.assertEqual(result.returncode, 0, result.stderr.decode("utf-8", "replace"))
+        cursor_root = self.project / ".cursor" / "agent-workflow-skills"
+        cursor_binding = json.loads(
+            (cursor_root / "model-routing.jsonc").read_text(encoding="utf-8").split("\n", 1)[1]
+        )
+        opencode_binding = json.loads(
+            self.binding.read_text(encoding="utf-8").split("\n", 1)[1]
+        )
+        self.assertEqual(cursor_binding["build"], "gpt-5.6-terra-xhigh")
+        self.assertEqual(cursor_binding["review"], "glm-5.2-high")
+        self.assertEqual(opencode_binding["build"], "huawei/glm5.2")
+        self.assertEqual(opencode_binding["review"], "huawei/kimik2.7")
+        self.assertNotEqual(cursor_binding, opencode_binding)
+        for root in (cursor_root, self.opencode / "agent-workflow-skills"):
+            resolver = root / "dispatch_resolver.py"
+            self.assertTrue(resolver.is_file())
+            state = json.loads((root / "install-state.json").read_text(encoding="utf-8"))
+            self.assertIn("dispatch_resolver.py", state["owned_sha256"])
+        self.assertFalse((self.home / ".claude/agent-workflow-skills/model-routing.jsonc").exists())
+        self.assertEqual(
+            self.invoke("uninstall.ps1", "all", "-Project", str(self.project)).returncode,
+            0,
+        )
+        for root in (cursor_root, self.opencode / "agent-workflow-skills"):
+            self.assertFalse((root / "dispatch_resolver.py").exists())
+            self.assertFalse((root / "validate_jsonc.py").exists())
     def test_full_lifecycle_is_automatic_idempotent_and_utf8(self):
         cfg, before = self.config("opencode.jsonc", '{"路径":"用户保留",}\n')
         agents = self.opencode / "AGENTS.md"
         agents.write_text("# 用户内容\n", encoding="utf-8")
         for _ in range(2):
-            result = self.invoke("install.ps1", "all", "-Project", str(self.project), *MODELS)
+            result = self.invoke("install.ps1", "all", "-Project", str(self.project), *PLATFORM_MODELS)
             self.assertEqual(result.returncode, 0, result.stderr.decode("utf-8", "replace"))
         self.assertIn("用户", result.stdout.decode("utf-8"))
         self.assertEqual(cfg.read_bytes(), before)
@@ -123,7 +167,7 @@ class InstallerTests(unittest.TestCase):
 
     def test_v3_profile_defaults_are_platform_specific_and_owned(self):
         self.assertEqual(
-            self.invoke("install.ps1", "all", "-Project", str(self.project), *MODELS).returncode,
+            self.invoke("install.ps1", "all", "-Project", str(self.project), *PLATFORM_MODELS).returncode,
             0,
         )
         cursor_rule = self.project / ".cursor/rules/workflow-gate.mdc"
@@ -170,7 +214,7 @@ class InstallerTests(unittest.TestCase):
         self.assertFalse((self.home / ".claude/CLAUDE.md").exists())
 
     def test_hand_edited_owned_profile_adapter_fails_before_refresh(self):
-        args = ("-Project", str(self.project), *MODELS)
+        args = ("-Project", str(self.project), *CURSOR_MODELS)
         self.assertEqual(self.invoke("install.ps1", "cursor", *args).returncode, 0)
         rule = self.project / ".cursor/rules/workflow-gate.mdc"
         rule.write_text("manual edit\n", encoding="utf-8")
@@ -310,6 +354,24 @@ run "$repo/uninstall.sh" --tool opencode --opencode-config-dir "$cfgdir"
 test ! -e "$cfgdir/agents/build.md"; test ! -e "$binding"
 ''')
         self.assertEqual(result.returncode, 0, result.stderr.decode())
+
+    def test_bash_all_keeps_cursor_and_opencode_models_isolated(self):
+        result = self.run_bash(r'''
+set -euo pipefail
+repo="$1"; root="$(mktemp -d)"; trap 'rm -rf "$root"' EXIT; export HOME="$root/home"
+run() { env -i HOME="$HOME" PATH=/usr/local/bin:/usr/bin:/bin bash "$@"; }
+project="$root/project"; config="$root/opencode"; mkdir -p "$project" "$config"
+run "$repo/install.sh" --tool all --project "$project" --opencode-config-dir "$config" \
+  --cursor-build-model gpt-5.6-terra-xhigh --cursor-reason-model gpt-5.6-sol-xhigh \
+  --cursor-review-model glm-5.2-high --opencode-build-model huawei/glm5.2 \
+  --opencode-reason-model huawei/glm5.2 --opencode-review-model huawei/kimik2.7
+grep -q '"build": "gpt-5.6-terra-xhigh"' "$project/.cursor/agent-workflow-skills/model-routing.jsonc"
+grep -q '"build": "huawei/glm5.2"' "$config/agent-workflow-skills/model-routing.jsonc"
+test -f "$project/.cursor/agent-workflow-skills/dispatch_resolver.py"
+test -f "$config/agent-workflow-skills/dispatch_resolver.py"
+test ! -e "$HOME/.claude/agent-workflow-skills/model-routing.jsonc"
+''')
+        self.assertEqual(result.returncode, 0, result.stderr.decode("utf-8", "replace"))
     def test_empty_bash_profile_is_rejected_before_mutation(self):
         result = self.run_bash(r'''
 set -euo pipefail
@@ -326,7 +388,7 @@ set -euo pipefail
 repo="$1"; root="$(mktemp -d)"; trap 'rm -rf "$root"' EXIT; export HOME="$root/home"
 run() { env -i HOME="$HOME" PATH=/usr/local/bin:/usr/bin:/bin bash "$@"; }
 project="$root/project"; cfgdir="$root/opencode"; mkdir -p "$project" "$cfgdir"
-run "$repo/install.sh" --tool cursor --project "$project" --build-model acme/terra --review-model other/glm
+run "$repo/install.sh" --tool cursor --project "$project" --build-model gpt-5.6-terra-xhigh --review-model glm-5.2-high
 grep -q 'profile=lean' "$project/.cursor/rules/workflow-gate.mdc"
 run "$repo/install.sh" --tool cursor --project "$project" --profile=balanced
 grep -q 'profile=balanced' "$project/.cursor/rules/workflow-gate.mdc"

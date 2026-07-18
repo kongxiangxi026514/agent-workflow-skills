@@ -19,6 +19,7 @@
 | `skills/research-routing/` | 按需 skill | Context7 / Tavily / GitHub 调研路由 |
 | `skills/parallel-dispatch/` | 按需 skill | 并行 vs 串行拆解 + 角色化模型路由(引用单点)+ 上下文封顶/熔断 |
 | `skills/memory-gate/` | 按需 skill | AGENTS.md 记忆更新 diff-review 双轨 gate |
+| `policy-v3/generated/skills/workflow-lifecycle/` | 按需 skill | R1/R2 discovery、TDD、验收与 closeout |
 | `config/model-routing.jsonc` | 模板 | build/reason/review 的无默认 provider binding 格式 |
 | `opencode/agents/{build,reason,review}.md` | 配置 | OpenCode 原生三角色 agent;不写用户主配置 |
 
@@ -33,12 +34,12 @@
 
 ## Cursor 安装(逐步)
 
-1. 装 5 个按需 skill(全局)并把强制脊柱写进某个项目:
+1. 装 6 个按需 skill(全局)并把强制脊柱写进某个项目:
 
    ```powershell
-   .\install.ps1 -Tool cursor -Project D:\path\to\your-repo -BuildModel provider/build-id -ReviewModel other/review-id
+   .\install.ps1 -Tool cursor -Project D:\path\to\your-repo -BuildModel cursor-build-slug -ReviewModel cursor-review-slug
    # 默认 lean；需要时显式改为 balanced
-   .\install.ps1 -Tool cursor -Project D:\path\to\your-repo -Profile balanced -BuildModel provider/build-id -ReviewModel other/review-id
+   .\install.ps1 -Tool cursor -Project D:\path\to\your-repo -Profile balanced -BuildModel cursor-build-slug -ReviewModel cursor-review-slug
    ```
 
    - `skills/*` → `%USERPROFILE%\.cursor\skills\<skill>\SKILL.md`(覆盖式,自动建目录),Cursor 按 `description` 自动发现调用。
@@ -52,11 +53,11 @@
 | --- | --- | --- |
 | Cursor | `skills/*` | `%USERPROFILE%\.cursor\skills\<skill>\` / `~/.cursor/skills/<skill>/` |
 | Cursor(带 Project) | `rules/workflow-gate.mdc` | `<project>/.cursor/rules/workflow-gate.mdc` |
-| Cursor(带 Project) | binding + adapter template | `<project>/.cursor/agent-workflow-skills/model-routing.jsonc` + `.cursor/rules/model-routing.mdc` |
+| Cursor(带 Project) | binding + resolver + adapter template | `<project>/.cursor/agent-workflow-skills/{model-routing.jsonc,dispatch_resolver.py}` + `.cursor/rules/model-routing.mdc` |
 | OpenCode | `skills/*` | `~/.config/opencode/skills/<skill>/` |
 | OpenCode | `rules/workflow-gate.mdc` | `~/.config/opencode/AGENTS.md` 标记块 |
 | OpenCode | `opencode/agents/{build,reason,review}.md` | `~/.config/opencode/agents/{build,reason,review}.md` |
-| OpenCode | binding + ownership state | `~/.config/opencode/agent-workflow-skills/{model-routing.jsonc,install-state.json}` |
+| OpenCode | binding + resolver + ownership state | `~/.config/opencode/agent-workflow-skills/{model-routing.jsonc,dispatch_resolver.py,install-state.json}` |
 | Claude | `policy-v3/generated/{skills,adapters/claude}` | `~/.claude/skills/<skill>/` + `~/.claude/CLAUDE.md` 标记块 + `~/.claude/agent-workflow-skills/install-state.json` |
 
 脚本自动完成全部复制和注入,无需 agent 或用户再手工移动文件。OpenCode 运行中的会话需在安装后重启。
@@ -80,6 +81,8 @@
 ## 模型路由
 
 `build` 处理实现/重构/调试/常规架构;`reason` 仅处理非显然跨系统权衡、不确定根因或契约级多步推理;`review` 独立验证。策略可移植,具体 ID 只在各目标 binding 中。
+
+Cursor 与 OpenCode binding 完全独立。`all` 安装必须分别提供 `CursorBuild/Reason/ReviewModel` 与 `OpenCodeBuild/Reason/ReviewModel`（bash 使用对应的 `--cursor-*` / `--opencode-*`），通用参数会因存在跨平台误用风险而失败。每次原生派发前运行目标中的 `dispatch_resolver.py`;若平台提供模型列表则完整传入并验证,然后原样使用 resolver 返回的原生参数。派发后保留 receipt；看不到 `actual_model` 时 `cross_model` 只能是 `unverified`。
 
 ## Claude 安装(逐步)
 

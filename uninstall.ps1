@@ -102,7 +102,9 @@ function Uninstall-Cursor {
             if ((Test-Path $rule) -and (Read-Utf8 $rule).Contains('Managed by agent-workflow-skills')) { Remove-Item -Force $rule }
         }
         if ($owned) {
-            Remove-Item -Force (Join-Path (Split-Path $state) 'model-routing.jsonc') -ErrorAction SilentlyContinue
+            foreach ($name in @('model-routing.jsonc', 'dispatch_resolver.py', 'validate_jsonc.py')) {
+                Remove-Item -Force (Join-Path (Split-Path $state) $name) -ErrorAction SilentlyContinue
+            }
             Remove-Item -Force $state
         }
         $summary.Add("cursor: processed spine rule $dest (removed only when bundle-owned)")
@@ -126,7 +128,9 @@ function Uninstall-OpenCode {
     }
     $summary.Add("opencode: processed native agents in $base\agents (removed only when bundle-owned; main config untouched)")
     if ($owned) {
-        Remove-Item -Force (Join-Path $base 'agent-workflow-skills\model-routing.jsonc') -ErrorAction SilentlyContinue
+        foreach ($name in @('model-routing.jsonc', 'dispatch_resolver.py', 'validate_jsonc.py')) {
+            Remove-Item -Force (Join-Path $base "agent-workflow-skills\$name") -ErrorAction SilentlyContinue
+        }
         Remove-Item -Force $state
     }
 }

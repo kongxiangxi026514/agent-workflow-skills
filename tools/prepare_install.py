@@ -6,23 +6,26 @@ from validate_jsonc import normalize_jsonc
 from render_policy import detect_drift, expected_outputs, profile_names
 
 ROOT = Path(__file__).resolve().parents[1]
-MODEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*(/[A-Za-z0-9][A-Za-z0-9._-]*)+$")
+CURSOR_MODEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+OPENCODE_MODEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*(/[A-Za-z0-9][A-Za-z0-9._-]*)+$")
 RESERVED = {"provider", "model", "placeholder", "example", "change-me", "your-provider", "your-model"}
 FORBIDDEN = ("gpt-5.6-", "glm-5.2-max", "huawei/")
 OWNER = ".agent-workflow-skills-owned"
 
 
-def _model(role, value, nullable=False):
+def _model(platform, role, value, nullable=False):
     if value is None and nullable:
         return None
-    if not isinstance(value, str) or not MODEL_RE.fullmatch(value):
-        raise ValueError(f"{role} model binding must be an exact provider/model ID")
+    pattern = CURSOR_MODEL_RE if platform == "cursor" else OPENCODE_MODEL_RE
+    if not isinstance(value, str) or not pattern.fullmatch(value):
+        expected = "native model slug" if platform == "cursor" else "provider/model ID"
+        raise ValueError(f"{role} model binding must be an exact {expected}")
     if any(part.lower() in RESERVED for part in value.split("/")):
         raise ValueError(f"{role} model binding contains a placeholder")
     return value
 
 
-def _binding(path, supplied):
+def _binding(path, supplied, platform):
     supplied = tuple("" if value == "-" else value for value in supplied)
     if path.exists():
         data = json.loads(normalize_jsonc(path.read_bytes().decode("utf-8-sig")))
@@ -31,9 +34,9 @@ def _binding(path, supplied):
         data.update({"build": supplied[0] or None, "reason": supplied[1] or None, "review": supplied[2] or None})
     if not isinstance(data, dict):
         raise ValueError("model binding root must be an object")
-    build = _model("build", data.get("build"))
-    reason = _model("reason", data.get("reason"), nullable=True)
-    review = _model("review", data.get("review"))
+    build = _model(platform, "build", data.get("build"))
+    reason = _model(platform, "reason", data.get("reason"), nullable=True)
+    review = _model(platform, "review", data.get("review"))
     effective_reason = reason or build
     if review in (build, effective_reason):
         raise ValueError("review model binding must differ from build and effective reason")
@@ -71,7 +74,7 @@ def _stage(stage, binding_path, platform, profile, supplied):
     if platform == "claude":
         data, models = None, ()
     else:
-        data, models = _binding(binding_path, supplied)
+        data, models = _binding(binding_path, supplied, platform)
     drift = detect_drift(ROOT, expected_outputs(ROOT))
     if drift:
         raise ValueError(f"generated policy artifacts drifted: {', '.join(drift)}")
@@ -82,22 +85,32 @@ def _stage(stage, binding_path, platform, profile, supplied):
             (skill / OWNER).write_text("agent-workflow-skills\n", encoding="utf-8", newline="\n")
     shutil.copy2(_adapter_source(platform, profile), stage / "workflow-gate.mdc")
     if platform != "claude":
-        (stage / "agents").mkdir()
-        for name, model in zip(("build", "reason", "review"), models):
-            _render(ROOT / f"opencode/agents/{name}.md", stage / f"agents/{name}.md", {"__OPENCODE_MODEL__": model})
-        _render(
-            ROOT / "cursor/model-routing.mdc",
-            stage / "model-routing.mdc",
-            {"__BUILD_MODEL__": models[0], "__REASON_MODEL__": models[1], "__REVIEW_MODEL__": models[2]},
-        )
+        if platform == "opencode":
+            (stage / "agents").mkdir()
+            for name, model in zip(("build", "reason", "review"), models):
+                _render(ROOT / f"opencode/agents/{name}.md", stage / f"agents/{name}.md", {"__OPENCODE_MODEL__": model})
+        else:
+            _render(
+                ROOT / "cursor/model-routing.mdc",
+                stage / "model-routing.mdc",
+                {"__BUILD_MODEL__": models[0], "__REASON_MODEL__": models[1], "__REVIEW_MODEL__": models[2]},
+            )
         binding_text = "// Edit role IDs, then rerun the installer.\n" + json.dumps(data, ensure_ascii=False, indent=2) + "\n"
         (stage / "model-routing.jsonc").write_text(binding_text, encoding="utf-8", newline="\n")
+        for name in ("dispatch_resolver.py", "validate_jsonc.py"):
+            shutil.copy2(ROOT / "tools" / name, stage / name)
     policy_owned = [stage / "workflow-gate.mdc", *(stage / "skills").glob("*/SKILL.md")]
     owned = [*policy_owned]
     if platform != "claude":
-        owned.extend((stage / "agents").glob("*.md"))
-        owned.extend((stage / "model-routing.mdc", stage / "model-routing.jsonc"))
-    owned.extend((stage / "skills").glob("*/SKILL.md"))
+        if platform == "opencode":
+            owned.extend((stage / "agents").glob("*.md"))
+        else:
+            owned.append(stage / "model-routing.mdc")
+        owned.extend((
+            stage / "model-routing.jsonc",
+            stage / "dispatch_resolver.py",
+            stage / "validate_jsonc.py",
+        ))
     state = {
         "bundle": "agent-workflow-skills",
         "version": 2,
@@ -113,7 +126,7 @@ def _stage(stage, binding_path, platform, profile, supplied):
     text = "\n".join(path.read_text(encoding="utf-8").lower() for path in portable)
     if any(token in text for token in FORBIDDEN):
         raise ValueError("portable runtime policy contains a concrete machine model identifier")
-    if platform != "claude" and "edit: deny" not in (stage / "agents/review.md").read_text(encoding="utf-8"):
+    if platform == "opencode" and "edit: deny" not in (stage / "agents/review.md").read_text(encoding="utf-8"):
         raise ValueError("review agent must deny edits")
     return models
 
