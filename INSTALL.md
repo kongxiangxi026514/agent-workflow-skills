@@ -32,6 +32,12 @@
 
 脚本以自身所在目录为 REPO_ROOT,可从任意工作目录调用。
 
+## Cursor checkout 与本机 binding
+
+`-Project` / `--project` 是一个明确的 Cursor 项目 checkout，而不是本安装包的 source checkout。每个独立项目或 worktree 都要单独执行 Cursor 安装，规则和 binding 才会写到该 checkout。
+
+Cursor binding 位于 `<project>/.cursor/agent-workflow-skills/model-routing.jsonc`（Windows 使用等价的反斜杠路径）。这是机器本地配置，勿提交；需要忽略时使用该 checkout 的 `.git/info/exclude`，不要为了安装器改写共享的用户配置。
+
 ## Cursor 安装(逐步)
 
 1. 装 6 个按需 skill(全局)并把强制脊柱写进某个项目:
