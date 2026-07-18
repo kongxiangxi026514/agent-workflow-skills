@@ -1,4 +1,4 @@
-<!-- GENERATED; policy_id=P00; source=policy-v3/fragments/l0-router.md; source_sha256=b2d3d8a380fa01bb1981391f3dbb9be7d0626729e4061045169de760bfdebfc4; registry_sha256=a0f339fcdd0ef7577e2f20f614ca1a2c3408ca5591f3bd3690710a9b3963e1a9; platform=opencode; profile=lean; profile_sha256=4daee70a12c80d742bdd80a4fda99ba70077025c9d3bd9a4c061d2b9be4291e2 -->
+<!-- GENERATED; policy_id=P00; source=policy-v3/fragments/l0-router.md; source_sha256=602b34a8f3289eefcc501a40e12eeff8b823c24d4d08ea11979f5a857f725b5f; registry_sha256=a0f339fcdd0ef7577e2f20f614ca1a2c3408ca5591f3bd3690710a9b3963e1a9; platform=opencode; profile=lean; profile_sha256=4daee70a12c80d742bdd80a4fda99ba70077025c9d3bd9a4c061d2b9be4291e2 -->
 <!-- profile-settings={"budget":{"capsule_max":600,"l0_max":1100},"escalation":{"ordinary_change_min_paths":2,"ordinary_path_count":3}} -->
 
 # Workflow Risk Router
@@ -19,4 +19,4 @@ Do not announce routing on routine turns. Emit a short receipt only when risk es
 
 Workers receive a 300–800 token capsule containing goal, non-goals, risk, allowed and forbidden scope, acceptance, loaded policy IDs, and artifact pointers. Never paste the full workflow into a worker prompt.
 
-Use the portable roles `build`, `reason`, and `review`; resolve their concrete bindings outside policy text. The parent owns scope, integration, and final verification.
+Use the portable roles `build`, `reason`, and `review`; resolve their concrete bindings outside policy text. Before every worker dispatch, run the installed `dispatch_resolver.py`, validate an exposed registry, and pass its exact native arguments. Keep the evidence receipt; an unobservable runtime model stays `unverified`. The parent owns scope, integration, and final verification.

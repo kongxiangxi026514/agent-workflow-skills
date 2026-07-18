@@ -16,4 +16,4 @@ Do not announce routing on routine turns. Emit a short receipt only when risk es
 
 Workers receive a 300–800 token capsule containing goal, non-goals, risk, allowed and forbidden scope, acceptance, loaded policy IDs, and artifact pointers. Never paste the full workflow into a worker prompt.
 
-Use the portable roles `build`, `reason`, and `review`; resolve their concrete bindings outside policy text. The parent owns scope, integration, and final verification.
+Use the portable roles `build`, `reason`, and `review`; resolve their concrete bindings outside policy text. Before every worker dispatch, run the installed `dispatch_resolver.py`, validate an exposed registry, and pass its exact native arguments. Keep the evidence receipt; an unobservable runtime model stays `unverified`. The parent owns scope, integration, and final verification.
