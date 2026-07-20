@@ -288,6 +288,67 @@ class InstallerTests(unittest.TestCase):
         self.assertEqual(binding_b.read_bytes(), binding_b_before)
         self.assertEqual(skill.read_text(encoding="utf-8"), "tampered global skill\n")
 
+    def test_cursor_uninstall_preserves_shared_skills_until_explicit_removal(self):
+        project_b = Path(self.temp.name) / "项目-b"
+        project_b.mkdir()
+        args_a = ("-Project", str(self.project), *CURSOR_MODELS)
+        args_b = ("-Project", str(project_b), *CURSOR_MODELS)
+        self.assertEqual(self.invoke("install.ps1", "cursor", *args_a).returncode, 0)
+        self.assertEqual(self.invoke("install.ps1", "cursor", *args_b).returncode, 0)
+        global_skill = self.home / ".cursor" / "skills" / "code-review" / "SKILL.md"
+        custom_skill = self.home / ".cursor" / "skills" / "custom" / "SKILL.md"
+        custom_skill.parent.mkdir()
+        custom_skill.write_text("user skill\n", encoding="utf-8")
+        self.assertEqual(
+            self.invoke("uninstall.ps1", "cursor", "-Project", str(self.project)).returncode,
+            0,
+        )
+        self.assertTrue(global_skill.is_file())
+        self.assertTrue(custom_skill.is_file())
+        self.assertTrue((project_b / ".cursor" / "rules" / "workflow-gate.mdc").is_file())
+        self.assertTrue((project_b / ".cursor" / "agent-workflow-skills" / "model-routing.jsonc").is_file())
+        self.assertEqual(
+            self.invoke("install.ps1", "cursor", *args_b).returncode, 0
+        )
+        self.assertEqual(
+            self.invoke("uninstall.ps1", "cursor", "-Project", str(self.project)).returncode,
+            0,
+        )
+        self.assertTrue(global_skill.is_file())
+        self.assertEqual(
+            self.invoke(
+                "uninstall.ps1",
+                "cursor",
+                "-Project",
+                str(project_b),
+                "-RemoveGlobalSkills",
+            ).returncode,
+            0,
+        )
+        self.assertFalse(global_skill.exists())
+        self.assertTrue(custom_skill.is_file())
+
+    def test_tampered_global_skill_blocks_explicit_removal_without_project_mutation(self):
+        args = ("-Project", str(self.project), *CURSOR_MODELS)
+        self.assertEqual(self.invoke("install.ps1", "cursor", *args).returncode, 0)
+        global_skill = self.home / ".cursor" / "skills" / "code-review" / "SKILL.md"
+        global_skill.write_text("tampered\n", encoding="utf-8")
+        state = self.project / ".cursor" / "agent-workflow-skills" / "install-state.json"
+        rule = self.project / ".cursor" / "rules" / "workflow-gate.mdc"
+        state_before, rule_before = state.read_bytes(), rule.read_bytes()
+        result = self.invoke(
+            "uninstall.ps1",
+            "cursor",
+            "-Project",
+            str(self.project),
+            "-RemoveGlobalSkills",
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(b"global skill", result.stderr.lower())
+        self.assertEqual(global_skill.read_text(encoding="utf-8"), "tampered\n")
+        self.assertEqual(state.read_bytes(), state_before)
+        self.assertEqual(rule.read_bytes(), rule_before)
+
     def test_all_uses_isolated_platform_bindings_and_installs_resolver(self):
         result = self.invoke(
             "install.ps1", "all", "-Project", str(self.project), *MIGRATE, *PLATFORM_MODELS
@@ -712,6 +773,22 @@ cp "$a/.cursor/agent-workflow-skills/install-state.json" "$root/a.before"; cp "$
 printf 'tampered\n' > "$HOME/.cursor/skills/code-review/SKILL.md"
 if run "$repo/install.sh" --tool cursor --project "$b" --build-model gpt-5.6-terra-xhigh --review-model glm-5.2-high; then exit 1; fi
 cmp "$a/.cursor/agent-workflow-skills/install-state.json" "$root/a.before"; cmp "$b/.cursor/agent-workflow-skills/install-state.json" "$root/b.before"
+''')
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+
+    def test_bash_cursor_global_skill_removal_requires_opt_in(self):
+        result = self.run_bash(r'''
+set -euo pipefail
+repo="$1"; root="$(mktemp -d)"; trap 'rm -rf "$root"' EXIT; export HOME="$root/home"
+run() { env -i HOME="$HOME" PATH=/usr/local/bin:/usr/bin:/bin bash "$@"; }
+a="$root/project-a"; b="$root/project-b"; mkdir -p "$a" "$b"
+run "$repo/install.sh" --tool cursor --project "$a" --build-model gpt-5.6-terra-xhigh --review-model glm-5.2-high
+run "$repo/install.sh" --tool cursor --project "$b" --build-model gpt-5.6-terra-xhigh --review-model glm-5.2-high
+mkdir -p "$HOME/.cursor/skills/custom"; printf 'user skill\n' > "$HOME/.cursor/skills/custom/SKILL.md"
+run "$repo/uninstall.sh" --tool cursor --project "$a"
+test -f "$HOME/.cursor/skills/code-review/SKILL.md"; test -f "$b/.cursor/rules/workflow-gate.mdc"
+run "$repo/uninstall.sh" --tool cursor --project "$b" --remove-global-skills
+test ! -e "$HOME/.cursor/skills/code-review"; test -f "$HOME/.cursor/skills/custom/SKILL.md"
 ''')
         self.assertEqual(result.returncode, 0, result.stderr.decode())
 

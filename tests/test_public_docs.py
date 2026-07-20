@@ -60,6 +60,8 @@ class PublicDocumentationTests(unittest.TestCase):
             "-OpenCodeModelConfig",
             "--migrate-opencode-model-config",
             "--opencode-model-config",
+            "-RemoveGlobalSkills",
+            "--remove-global-skills",
             "migration-backups",
             "opencode-model-migration.json",
         ):
