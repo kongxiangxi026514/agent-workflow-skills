@@ -75,6 +75,9 @@ class InstallerTests(unittest.TestCase):
             json.dumps(
                 {
                     "bundle": "agent-workflow-skills",
+                    "version": 2,
+                    "platform": "opencode",
+                    "profile": "balanced",
                     "owned_sha256": {
                         "agents/build.md": hashlib.sha256(legacy.read_bytes()).hexdigest()
                     },
@@ -201,6 +204,12 @@ class InstallerTests(unittest.TestCase):
         config = self.opencode / "opencode.jsonc"
         self.assertEqual(self.roles(config)["build"]["model"], "huawei/glm5.2")
         self.assertFalse((self.opencode / "agents/build.md").exists())
+        audit = (self.opencode / "agent-workflow-skills/opencode-model-migration.json").read_text(encoding="utf-8")
+        state_text = (self.opencode / "agent-workflow-skills/install-state.json").read_text(encoding="utf-8")
+        for model in ("huawei/glm5.2", "huawei/kimik2.7"):
+            self.assertNotIn(model, audit)
+            self.assertNotIn(model, state_text)
+            self.assertNotIn(model.encode(), result.stdout + result.stderr)
         self.assertFalse((self.home / ".claude/agent-workflow-skills/model-routing.jsonc").exists())
         self.assertEqual(
             self.invoke("uninstall.ps1", "all", "-Project", str(self.project)).returncode,
@@ -233,7 +242,8 @@ class InstallerTests(unittest.TestCase):
         for _ in range(2):
             self.assertEqual(self.invoke("uninstall.ps1", "all", "-Project", str(self.project)).returncode, 0)
         self.assertEqual(json.loads(cfg.read_text(encoding="utf-8"))["路径"], "用户保留")
-        self.assertNotIn("agent", json.loads(cfg.read_text(encoding="utf-8")))
+        remaining_roles = json.loads(cfg.read_text(encoding="utf-8"))["agent"]
+        self.assertTrue(all("model" not in role for role in remaining_roles.values()))
         self.assertIn("用户内容", agents.read_text(encoding="utf-8"))
         self.assertNotIn("BEGIN agent-workflow-skills spine", agents.read_text(encoding="utf-8"))
         self.assertTrue(custom.is_file())
@@ -364,6 +374,36 @@ class InstallerTests(unittest.TestCase):
         self.assertEqual(skill.read_bytes(), before)
         self.assertEqual(self.invoke("uninstall.ps1", "opencode").returncode, 0)
         self.assertEqual(skill.read_bytes(), before)
+
+    def test_forged_owned_skill_marker_and_state_hash_fail_before_mutation(self):
+        config, before = self.config("opencode.jsonc", '{"user":"keep"}\n')
+        skill = self.opencode / "skills" / "code-review" / "SKILL.md"
+        skill.parent.mkdir(parents=True)
+        skill.write_text("forged\n", encoding="utf-8")
+        (skill.parent / ".agent-workflow-skills-owned").write_text(
+            "agent-workflow-skills\n", encoding="utf-8"
+        )
+        state = self.opencode / "agent-workflow-skills" / "install-state.json"
+        state.parent.mkdir()
+        state.write_text(
+            json.dumps(
+                {
+                    "bundle": "agent-workflow-skills",
+                    "version": 3,
+                    "platform": "opencode",
+                    "profile": "balanced",
+                    "owned_sha256": {"skills/code-review/SKILL.md": "0" * 64},
+                }
+            ),
+            encoding="utf-8",
+        )
+        result = self.invoke("install.ps1", "opencode", *MIGRATE, *MODELS)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(b"ownership", result.stderr.lower())
+        self.assertEqual(config.read_bytes(), before)
+        self.assertEqual(skill.read_text(encoding="utf-8"), "forged\n")
+        self.assertFalse((self.opencode / "AGENTS.md").exists())
+        self.assertFalse(self.binding.exists())
     def test_config_dir_override_and_failed_refresh_are_safe(self):
         custom = self.home / "自定义配置"
         args = ("-OpenCodeConfigDir", str(custom), *MIGRATE, *MODELS)
@@ -377,7 +417,8 @@ class InstallerTests(unittest.TestCase):
         state = json.loads((custom / "agent-workflow-skills/install-state.json").read_text(encoding="utf-8"))
         self.assertNotIn("agents/build.md", state["owned_sha256"])
         self.assertEqual(self.invoke("uninstall.ps1", "opencode", "-OpenCodeConfigDir", str(custom)).returncode, 0)
-        self.assertNotIn("agent", json.loads(config.read_text(encoding="utf-8")))
+        remaining_roles = json.loads(config.read_text(encoding="utf-8"))["agent"]
+        self.assertTrue(all("model" not in role for role in remaining_roles.values()))
     def test_generated_runtime_policy_contains_roles_not_model_ids(self):
         generated = ROOT / "policy-v3/generated"
         files = sorted((generated / "adapters").rglob("*")) + sorted((generated / "skills").rglob("SKILL.md"))

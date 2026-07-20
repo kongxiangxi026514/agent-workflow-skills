@@ -79,7 +79,7 @@ Cursor binding 位于 `<project>/.cursor/agent-workflow-skills/model-routing.jso
 - 脊柱正文(已剥离 `.mdc` frontmatter)幂等注入 `~/.config/opencode/AGENTS.md`(全局始终加载),用 `<!-- BEGIN agent-workflow-skills spine -->` / `<!-- END agent-workflow-skills spine -->` 标记块包裹。
 - 首次安装用 CLI 明确给 `build` 与 `review`;`reason` 省略即以 JSONC `null` 复用 build。角色配置写入 OpenCode 主配置 `agent` 映射，而不是 bundle Markdown role agent；未命名的 Markdown agent 继承会话模型。之后编辑 `<config-dir>/agent-workflow-skills/model-routing.jsonc` 并带相同 migration flag 重跑，三个角色的 JSON 字段会刷新；review 保持 `edit: deny`。
 - 默认 config dir 是字面 `~/.config/opencode`;覆盖参数同时适用于 install/uninstall。默认不改主配置并 fail-loud；`--migrate-opencode-model-config` / `-MigrateOpenCodeModelConfig` 是唯一 opt-in。`--opencode-model-config` / `-OpenCodeModelConfig` 可选择 `opencode.json` 或 `opencode.jsonc`；未指定时只能使用唯一现存文件，无文件时创建 JSONC，双文件或损坏内容均拒绝且不改写。
-- 迁移保留非模型 JSON 语义，将原字节备份到 `<config-dir>/agent-workflow-skills/migration-backups/`，并在 `opencode-model-migration.json` 记录前后 SHA-256 与 managed role fields。它只会移走 state hash 与 marker 同时证明属于旧 bundle 的 `agents/{build,reason,review}.md`；同名自定义 agent 会 fail-loud，用户必须先手动重命名或迁移。其余 Markdown agent（例如 `github-helper`）会递归剥离 `model:`。安装器只验证 review ID 不等于 build/effective-reason;provider 字符串不同不能证明模型家族不同。全部 UTF-8 无 BOM;先临时 staging/校验再替换目标,失败校验不改变既有 bundle 状态。完成后必须重启 OpenCode。
+- 迁移保留非模型 JSON 语义，将原字节备份到 `<config-dir>/agent-workflow-skills/migration-backups/`，并在 `opencode-model-migration.json` 记录前后 SHA-256、binding/config digest 和 role model hash（不记录模型 ID）。它只会移走 state hash 与 marker 同时证明属于旧 bundle 的 `agents/{build,reason,review}.md`；同名自定义 agent 会 fail-loud，用户必须先手动重命名或迁移。其余 Markdown agent（例如 `github-helper`）会递归剥离 `model:`。安装器只验证 review ID 不等于 build/effective-reason;provider 字符串不同不能证明模型家族不同。全部 UTF-8 无 BOM;先临时 staging/校验再替换目标,失败校验不改变既有 bundle 状态。完成后必须重启 OpenCode。
 
 ## 模型路由
 
@@ -102,7 +102,7 @@ Cursor 与 OpenCode binding 完全独立。`all` 安装必须分别提供 `Curso
 - **ownership**:`install-state.json` 与 marker 标识本包资产;同名非本包 skill/agent/rule 失败且不覆盖,卸载也保留。
 - **AGENTS.md / CLAUDE.md 脊柱注入**:用标记块定位。若标记块已存在则**原地替换**,否则追加;文件不存在则创建。因此重复运行只会保留**一个**脊柱块,不会累积。文件里标记块以外的内容原样保留。
 - **OpenCode role map**:仅在明确 migration opt-in 时更新 `agent.build/reason/review`;其它 agent 字段保留。三角色 Markdown 文件移出 discovery，其余 Markdown role 的 `model:` 被剥离以继承会话模型。
-- **opencode.json / opencode.jsonc**:默认零读取、零改写；迁移模式只选择一个安全路径，拒绝双文件、损坏 JSONC 或 reparse/symlink 路径，并留下逐字节 backup 与 SHA audit。
+- **opencode.json / opencode.jsonc**:默认零读取、零改写；迁移模式只选择一个安全路径，拒绝双文件、损坏 JSONC 或已检测到的 reparse/symlink 路径，并留下逐字节 backup 与 SHA audit。排他 lock 与提交前后 identity 检查保护正常并发；具备同一用户目录替换权限的主动本地攻击者超出纯 Python 跨平台实现的保证。
 
 ## 卸载 / 热插拔
 

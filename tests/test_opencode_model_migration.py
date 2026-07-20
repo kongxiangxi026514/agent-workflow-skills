@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import json
 import subprocess
 import sys
@@ -20,6 +21,17 @@ def parse_jsonc(path: Path) -> dict:
     from validate_jsonc import normalize_jsonc
 
     return json.loads(normalize_jsonc(path.read_text(encoding="utf-8")))
+
+
+def load_helper():
+    sys.path.insert(0, str(ROOT / "tools"))
+    spec = importlib.util.spec_from_file_location(
+        "migrate_opencode_models", HELPER
+    )
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
 
 
 class OpenCodeModelMigrationTests(unittest.TestCase):
@@ -75,6 +87,9 @@ class OpenCodeModelMigrationTests(unittest.TestCase):
             json.dumps(
                 {
                     "bundle": "agent-workflow-skills",
+                    "version": 2,
+                    "platform": "opencode",
+                    "profile": "balanced",
                     "owned_sha256": {
                         f"agents/{relative}": hashlib.sha256(role.read_bytes()).hexdigest()
                     },
@@ -163,7 +178,7 @@ class OpenCodeModelMigrationTests(unittest.TestCase):
         self.mark_legacy_role_owned(legacy)
         result = self.invoke("--fail-after-write", "6")
         self.assertNotEqual(result.returncode, 0)
-        self.assertEqual(config.read_bytes(), before)
+        self.assertEqual(config.read_bytes(), before, result.stderr.decode("utf-8", "replace"))
         self.assertIn("model:", agent.read_text(encoding="utf-8"))
         self.assertIn("model:", legacy.read_text(encoding="utf-8"))
         self.assertFalse(self.audit.exists())
@@ -182,7 +197,8 @@ class OpenCodeModelMigrationTests(unittest.TestCase):
         self.assertEqual(cleaned["agent"]["build"], {"user": "keep"})
         self.assertEqual(cleaned["agent"]["reason"]["description"], "user changed")
         self.assertNotIn("model", cleaned["agent"]["reason"])
-        self.assertNotIn("review", cleaned["agent"])
+        self.assertNotIn("model", cleaned["agent"]["review"])
+        self.assertEqual(cleaned["agent"]["review"]["permission"], {"edit": "deny"})
 
     def test_reparse_config_path_is_rejected_without_creating_audit(self):
         target = self.base / "target.jsonc"
@@ -308,6 +324,178 @@ class OpenCodeModelMigrationTests(unittest.TestCase):
         self.assertIn(b"reparse", result.stderr.lower())
         self.assertEqual(config.read_bytes(), before)
         self.assertFalse(self.audit.exists())
+
+    def test_quoted_model_keys_are_removed_and_complex_model_yaml_is_rejected(self):
+        config = self.base / "opencode.jsonc"
+        config.write_text("{}\n", encoding="utf-8")
+        helper = self.base / "agents" / "nested" / "github-helper.md"
+        helper.parent.mkdir(parents=True)
+        helper.write_text(
+            "---\n\"model\": sample/double\n'model': sample/single\n"
+            "description: helper\n---\n",
+            encoding="utf-8",
+        )
+        self.assertEqual(self.invoke().returncode, 0)
+        sanitized = helper.read_text(encoding="utf-8")
+        self.assertNotIn("model", sanitized.lower())
+        self.assertIn("description: helper", sanitized)
+
+        self.temp.cleanup()
+        self.setUp()
+        config = self.base / "opencode.jsonc"
+        before = b'{"user":"keep"}\n'
+        config.write_bytes(before)
+        helper = self.base / "agents" / "github-helper.md"
+        helper.parent.mkdir()
+        helper.write_text("---\nmodel: |\n  unsafe\n---\n", encoding="utf-8")
+        result = self.invoke()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(b"yaml", result.stderr.lower())
+        self.assertEqual(config.read_bytes(), before)
+        self.assertIn("model: |", helper.read_text(encoding="utf-8"))
+
+        self.temp.cleanup()
+        self.setUp()
+        config = self.base / "opencode.jsonc"
+        config.write_bytes(before)
+        helper = self.base / "agents" / "github-helper.md"
+        helper.parent.mkdir()
+        helper.write_text("---\n<<: *shared\n---\n", encoding="utf-8")
+        result = self.invoke()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(b"yaml", result.stderr.lower())
+        self.assertEqual(config.read_bytes(), before)
+
+    def test_existing_role_fields_are_preserved_and_review_permission_conflicts(self):
+        config = self.base / "opencode.json"
+        original = {
+            "agent": {
+                "build": {
+                    "model": "sample/old-build",
+                    "mode": "custom",
+                    "description": "keep build",
+                    "custom": {"nested": True},
+                },
+                "review": {
+                    "model": "sample/old-review",
+                    "mode": "custom-review",
+                    "description": "keep review",
+                    "permission": {"edit": "deny", "bash": "ask", "prompt": "keep"},
+                },
+            }
+        }
+        config.write_text(json.dumps(original), encoding="utf-8")
+        self.assertEqual(self.invoke().returncode, 0)
+        migrated = parse_jsonc(config)
+        self.assertEqual(migrated["agent"]["build"]["mode"], "custom")
+        self.assertEqual(migrated["agent"]["build"]["description"], "keep build")
+        self.assertEqual(migrated["agent"]["build"]["custom"], {"nested": True})
+        self.assertEqual(
+            migrated["agent"]["review"]["permission"],
+            {"edit": "deny", "bash": "ask", "prompt": "keep"},
+        )
+        self.assertEqual(migrated["agent"]["reason"]["mode"], "subagent")
+
+        result = self.invoke("--uninstall")
+        self.assertEqual(result.returncode, 0, result.stderr.decode("utf-8", "replace"))
+        cleaned = parse_jsonc(config)
+        self.assertNotIn("model", cleaned["agent"]["build"])
+        self.assertEqual(cleaned["agent"]["build"]["custom"], {"nested": True})
+        self.assertEqual(cleaned["agent"]["review"]["permission"]["bash"], "ask")
+
+        self.temp.cleanup()
+        self.setUp()
+        config = self.base / "opencode.json"
+        conflict = copy = {
+            "agent": {"review": {"model": "sample/old", "permission": {"edit": "allow"}}}
+        }
+        before = json.dumps(copy).encode("utf-8")
+        config.write_bytes(before)
+        result = self.invoke()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(b"permission", result.stderr.lower())
+        self.assertEqual(config.read_bytes(), before)
+
+    def test_audit_never_serializes_model_ids_and_lock_contention_fails_loudly(self):
+        config = self.base / "opencode.jsonc"
+        config.write_text("{}\n", encoding="utf-8")
+        result = self.invoke()
+        self.assertEqual(result.returncode, 0, result.stderr.decode("utf-8", "replace"))
+        audit_text = self.audit.read_text(encoding="utf-8")
+        state_text = (self.binding.parent / "install-state.json").read_text(encoding="utf-8") if (self.binding.parent / "install-state.json").exists() else ""
+        for model in ("sample/build-v1", "sample/review-v1"):
+            self.assertNotIn(model, audit_text)
+            self.assertNotIn(model, state_text)
+            self.assertNotIn(model.encode(), result.stdout + result.stderr)
+
+        self.temp.cleanup()
+        self.setUp()
+        config = self.base / "opencode.jsonc"
+        before = b"{}\n"
+        config.write_bytes(before)
+        lock = self.binding.parent / ".opencode-model-migration.lock"
+        lock.write_text("held", encoding="utf-8")
+        result = self.invoke()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(b"lock", result.stderr.lower())
+        self.assertEqual(config.read_bytes(), before)
+
+    def test_forged_agent_marker_and_manifest_hash_fail_before_mutation(self):
+        config = self.base / "opencode.jsonc"
+        before = b"{}\n"
+        config.write_bytes(before)
+        agent = self.base / "agents" / "build.md"
+        agent.parent.mkdir()
+        agent.write_text(
+            "---\nmodel: sample/user\n---\n<!-- Managed by agent-workflow-skills. -->\n",
+            encoding="utf-8",
+        )
+        (self.binding.parent / "install-state.json").write_text(
+            json.dumps(
+                {
+                    "bundle": "agent-workflow-skills",
+                    "version": 2,
+                    "platform": "opencode",
+                    "profile": "balanced",
+                    "owned_sha256": {"agents/build.md": "0" * 64},
+                }
+            ),
+            encoding="utf-8",
+        )
+        result = self.invoke()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(b"bundle-owned", result.stderr.lower())
+        self.assertEqual(config.read_bytes(), before)
+        self.assertTrue(agent.is_file())
+
+    def test_simulated_path_swap_is_detected_before_second_commit_and_rolls_back(self):
+        helper = load_helper()
+        first = self.base / "first.txt"
+        second = self.base / "second.txt"
+        first.write_bytes(b"first-before")
+        second.write_bytes(b"second-before")
+        original_write = helper._write_atomic
+
+        def swap_before_write(path, content, mode=None, guard=None):
+            if path == second:
+                second.unlink()
+                second.write_bytes(b"attacker-replacement")
+            return original_write(path, content, mode, guard)
+
+        helper._write_atomic = swap_before_write
+        try:
+            with self.assertRaises(helper.MigrationError):
+                helper._apply_transaction(
+                    [
+                        helper.Change(first, b"first-before", b"first-after"),
+                        helper.Change(second, b"second-before", b"second-after"),
+                    ],
+                    base=self.base,
+                )
+        finally:
+            helper._write_atomic = original_write
+        self.assertEqual(first.read_bytes(), b"first-before")
+        self.assertEqual(second.read_bytes(), b"attacker-replacement")
 
 
 if __name__ == "__main__":
