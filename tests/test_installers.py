@@ -170,6 +170,50 @@ class InstallerTests(unittest.TestCase):
         self.assertFalse((self.opencode / "AGENTS.md").exists())
         self.assertFalse(self.binding.exists())
 
+    def test_all_restores_cursor_when_opencode_fails(self):
+        config, before = self.config("opencode.jsonc", '{"user":"keep"}\n')
+        global_keep = self.home / ".cursor" / "keep.txt"
+        project_keep = self.project / ".cursor" / "keep.txt"
+        global_keep.parent.mkdir()
+        project_keep.parent.mkdir()
+        global_keep.write_text("global keep\n", encoding="utf-8")
+        project_keep.write_text("project keep\n", encoding="utf-8")
+        result = self.invoke(
+            "install.ps1",
+            "all",
+            "-Project",
+            str(self.project),
+            *MIGRATE,
+            *PLATFORM_MODELS,
+            env={"AGENT_WORKFLOW_OPENCODE_TRANSACTION_FAIL_AFTER": "4"},
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(config.read_bytes(), before)
+        self.assertEqual(global_keep.read_text(encoding="utf-8"), "global keep\n")
+        self.assertEqual(project_keep.read_text(encoding="utf-8"), "project keep\n")
+        self.assertFalse((self.home / ".cursor" / "skills").exists())
+        self.assertFalse((self.project / ".cursor" / "rules").exists())
+        self.assertFalse((self.home / ".claude").exists())
+
+    def test_all_restores_earlier_targets_when_claude_fails(self):
+        config, before = self.config("opencode.jsonc", '{"user":"keep"}\n')
+        result = self.invoke(
+            "install.ps1",
+            "all",
+            "-Project",
+            str(self.project),
+            *MIGRATE,
+            *PLATFORM_MODELS,
+            env={"AGENT_WORKFLOW_TEST_FAIL_PLATFORM": "claude"},
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(config.read_bytes(), before)
+        self.assertFalse((self.project / ".cursor").exists())
+        self.assertFalse((self.home / ".cursor").exists())
+        self.assertFalse((self.home / ".claude").exists())
+        for model in ("huawei/glm5.2", "huawei/kimik2.7"):
+            self.assertNotIn(model.encode(), result.stdout + result.stderr)
+
     def test_opencode_requires_explicit_migration_before_all_mutation(self):
         result = self.invoke("install.ps1", "all", "-Project", str(self.project), *PLATFORM_MODELS)
         self.assertNotEqual(result.returncode, 0)
@@ -267,6 +311,8 @@ class InstallerTests(unittest.TestCase):
             state = json.loads(state_path.read_text(encoding="utf-8"))
             self.assertEqual(state["profile"], expected_profile)
             self.assertIn("workflow-gate.mdc", state["policy_owned_sha256"])
+            if state["platform"] == "opencode":
+                self.assertRegex(state["spine_block_sha256"], r"^[0-9a-f]{64}$")
         skill = self.opencode / "skills/workflow-lifecycle/SKILL.md"
         self.assertIn("GENERATED; policy_id=P01", skill.read_text(encoding="utf-8"))
 
@@ -281,6 +327,7 @@ class InstallerTests(unittest.TestCase):
         self.assertEqual(state["platform"], "claude")
         self.assertEqual(state["profile"], "balanced")
         self.assertIn("workflow-gate.mdc", state["policy_owned_sha256"])
+        self.assertRegex(state["spine_block_sha256"], r"^[0-9a-f]{64}$")
         for skill in V3_SKILLS:
             self.assertTrue((claude / "skills" / skill / "SKILL.md").is_file())
         skill = claude / "skills/workflow-lifecycle/SKILL.md"
@@ -356,6 +403,25 @@ class InstallerTests(unittest.TestCase):
         self.assertFalse((self.opencode / "skills").exists())
         self.assertNotEqual(self.invoke("uninstall.ps1", "opencode").returncode, 0)
         self.assertEqual(agents.read_bytes(), before)
+
+    def test_forged_complete_spine_marker_requires_state_provenance(self):
+        agents = self.opencode / "AGENTS.md"
+        agents.parent.mkdir(parents=True)
+        agents.write_text(
+            "# user\n<!-- BEGIN agent-workflow-skills spine -->\n"
+            "forged\n<!-- END agent-workflow-skills spine -->\n",
+            encoding="utf-8",
+        )
+        before = agents.read_bytes()
+        result = self.invoke("install.ps1", "opencode", *MIGRATE, *MODELS)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(b"spine", result.stderr.lower())
+        self.assertEqual(agents.read_bytes(), before)
+        self.assertFalse(self.binding.exists())
+        result = self.invoke("uninstall.ps1", "opencode")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(agents.read_bytes(), before)
+
     def test_unowned_skill_refuses_without_creating_binding(self):
         skill = self.opencode / "skills/code-review/SKILL.md"
         skill.parent.mkdir(parents=True)
@@ -372,7 +438,7 @@ class InstallerTests(unittest.TestCase):
         before = skill.read_bytes()
         self.assertNotEqual(self.invoke("install.ps1", "opencode", *MIGRATE).returncode, 0)
         self.assertEqual(skill.read_bytes(), before)
-        self.assertEqual(self.invoke("uninstall.ps1", "opencode").returncode, 0)
+        self.assertNotEqual(self.invoke("uninstall.ps1", "opencode").returncode, 0)
         self.assertEqual(skill.read_bytes(), before)
 
     def test_forged_owned_skill_marker_and_state_hash_fail_before_mutation(self):
@@ -507,6 +573,24 @@ cmp "$cfgdir/opencode.jsonc" "$root/before"
 test ! -e "$cfgdir/skills"; test ! -e "$cfgdir/AGENTS.md"
 test ! -e "$cfgdir/agent-workflow-skills/model-routing.jsonc"
 test ! -e "$cfgdir/agent-workflow-skills/install-state.json"
+''')
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+
+    def test_bash_all_restores_prior_platforms_on_later_failures(self):
+        result = self.run_bash(r'''
+set -euo pipefail
+repo="$1"; root="$(mktemp -d)"; trap 'rm -rf "$root"' EXIT; export HOME="$root/home"
+project="$root/project"; config="$root/opencode"; mkdir -p "$project" "$config"
+printf '%s\n' '{"user":"keep"}' > "$config/opencode.jsonc"; cp "$config/opencode.jsonc" "$root/before"
+common=(--tool all --project "$project" --opencode-config-dir "$config" --migrate-opencode-model-config
+  --cursor-build-model gpt-5.6-terra-xhigh --cursor-review-model glm-5.2-high
+  --opencode-build-model acme/terra --opencode-review-model other/glm)
+if env -i HOME="$HOME" PATH=/usr/local/bin:/usr/bin:/bin AGENT_WORKFLOW_OPENCODE_TRANSACTION_FAIL_AFTER=4 \
+  bash "$repo/install.sh" "${common[@]}"; then exit 1; fi
+cmp "$config/opencode.jsonc" "$root/before"; test ! -e "$project/.cursor"; test ! -e "$HOME/.cursor"; test ! -e "$HOME/.claude"
+if env -i HOME="$HOME" PATH=/usr/local/bin:/usr/bin:/bin AGENT_WORKFLOW_TEST_FAIL_PLATFORM=claude \
+  bash "$repo/install.sh" "${common[@]}"; then exit 1; fi
+cmp "$config/opencode.jsonc" "$root/before"; test ! -e "$project/.cursor"; test ! -e "$HOME/.cursor"; test ! -e "$HOME/.claude"
 ''')
         self.assertEqual(result.returncode, 0, result.stderr.decode())
 

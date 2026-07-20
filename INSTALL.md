@@ -7,7 +7,7 @@
 - Cursor 默认 `lean`，OpenCode 与 Claude 默认 `balanced`；可用 PowerShell `-Profile lean|balanced` 或 bash `--profile lean|balanced` 覆盖。
 - `lean` 与 `balanced` 只改变 R0/R1 升级阈值和 L0/capsule budget，绝不维护两套 policy 正文。
 - R2 Strict 触发、`P01,P04` 加载与独立审查在两个 profile 中相同。
-- 生成的 adapter/skills 写入 fragment ID/hash、registry hash、profile 与 ownership manifest。下一次 install 会在任何写入前检查 drift，手改受管生成物会 fail-loud。
+- 生成的 adapter/skills 写入 fragment ID/hash、registry hash、profile、精确 spine block digest 与 ownership manifest。下一次 install 会在任何写入前检查 drift，手改受管生成物会 fail-loud。
 
 ## 组成
 

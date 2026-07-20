@@ -331,14 +331,15 @@ class OpenCodeModelMigrationTests(unittest.TestCase):
         helper = self.base / "agents" / "nested" / "github-helper.md"
         helper.parent.mkdir(parents=True)
         helper.write_text(
-            "---\n\"model\": sample/double\n'model': sample/single\n"
-            "description: helper\n---\n",
+            "---\n\"model\": sample/double\n'model': sample/single\nMODEL: sample/upper\n"
+            "description: helper\npermission:\n  edit: deny\n---\n",
             encoding="utf-8",
         )
         self.assertEqual(self.invoke().returncode, 0)
         sanitized = helper.read_text(encoding="utf-8")
         self.assertNotIn("model", sanitized.lower())
         self.assertIn("description: helper", sanitized)
+        self.assertIn("permission:\n  edit: deny", sanitized)
 
         self.temp.cleanup()
         self.setUp()
@@ -380,7 +381,7 @@ class OpenCodeModelMigrationTests(unittest.TestCase):
                     "model": "sample/old-review",
                     "mode": "custom-review",
                     "description": "keep review",
-                    "permission": {"edit": "deny", "bash": "ask", "prompt": "keep"},
+                    "permission": {"bash": "ask", "prompt": "keep"},
                 },
             }
         }
@@ -402,6 +403,19 @@ class OpenCodeModelMigrationTests(unittest.TestCase):
         self.assertNotIn("model", cleaned["agent"]["build"])
         self.assertEqual(cleaned["agent"]["build"]["custom"], {"nested": True})
         self.assertEqual(cleaned["agent"]["review"]["permission"]["bash"], "ask")
+
+        self.temp.cleanup()
+        self.setUp()
+        config = self.base / "opencode.json"
+        config.write_text(
+            json.dumps({"agent": {"review": {"model": "sample/old", "custom": True}}}),
+            encoding="utf-8",
+        )
+        self.assertEqual(self.invoke().returncode, 0)
+        self.assertEqual(
+            parse_jsonc(config)["agent"]["review"]["permission"], {"edit": "deny"}
+        )
+        self.assertTrue(parse_jsonc(config)["agent"]["review"]["custom"])
 
         self.temp.cleanup()
         self.setUp()
