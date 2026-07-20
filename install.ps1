@@ -269,6 +269,35 @@ function Install-Claude {
     $summary.Add("claude: ownership state -> $base\agent-workflow-skills\install-state.json")
 }
 
+function New-TargetSnapshot([string]$Root, [string]$Path) {
+    $id = [guid]::NewGuid().ToString('N')
+    $payload = Join-Path $Root $id
+    $exists = Test-Path -LiteralPath $Path
+    if ($exists) {
+        Copy-Item -Recurse -Force -LiteralPath $Path -Destination $payload
+    }
+    return [pscustomobject]@{ Path = $Path; Payload = $payload; Exists = $exists }
+}
+
+function Restore-TargetSnapshot($Snapshot) {
+    if (Test-Path -LiteralPath $Snapshot.Path) {
+        Remove-Item -Recurse -Force -LiteralPath $Snapshot.Path
+    }
+    if ($Snapshot.Exists) {
+        $parent = Split-Path -Parent $Snapshot.Path
+        if (-not (Test-Path -LiteralPath $parent)) {
+            New-Item -ItemType Directory -Path $parent -Force | Out-Null
+        }
+        Copy-Item -Recurse -Force -LiteralPath $Snapshot.Payload -Destination $Snapshot.Path
+    }
+}
+
+function Test-InjectedPlatformFailure([string]$Platform) {
+    if ($env:AGENT_WORKFLOW_TEST_FAIL_PLATFORM -eq $Platform) {
+        throw "Injected all-platform failure after $Platform installation."
+    }
+}
+
 if (($Tool -eq 'cursor' -or $Tool -eq 'all') -and -not $Project) {
     throw '-Project is required for Cursor installation so the forced spine is installed automatically. Nothing was installed.'
 }
@@ -314,7 +343,35 @@ try {
         'cursor' { Install-Cursor }
         'opencode' { Install-OpenCode }
         'claude' { Install-Claude }
-        'all' { Install-Cursor; Install-OpenCode; Install-Claude }
+        'all' {
+            $snapshotRoot = Join-Path ([IO.Path]::GetTempPath()) "agent-workflow-all-$([guid]::NewGuid().ToString('N'))"
+            New-Item -ItemType Directory -Path $snapshotRoot -Force | Out-Null
+            $snapshots = @(
+                (New-TargetSnapshot $snapshotRoot (Join-Path $env:USERPROFILE '.cursor')),
+                (New-TargetSnapshot $snapshotRoot (Join-Path $Project '.cursor')),
+                (New-TargetSnapshot $snapshotRoot $OpenCodeBase),
+                (New-TargetSnapshot $snapshotRoot (Join-Path $env:USERPROFILE '.claude'))
+            )
+            try {
+                Install-Cursor
+                Test-InjectedPlatformFailure 'cursor'
+                Install-OpenCode
+                Test-InjectedPlatformFailure 'opencode'
+                Install-Claude
+                Test-InjectedPlatformFailure 'claude'
+            }
+            catch {
+                $restore = [object[]]$snapshots
+                [array]::Reverse($restore)
+                foreach ($snapshot in $restore) {
+                    Restore-TargetSnapshot $snapshot
+                }
+                throw
+            }
+            finally {
+                Remove-Item -Recurse -Force -LiteralPath $snapshotRoot -ErrorAction SilentlyContinue
+            }
+        }
     }
 }
 finally {

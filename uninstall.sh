@@ -42,6 +42,22 @@ resolve_python() {
   echo "A runnable Python 3 interpreter is required to verify managed OpenCode role fields." >&2; return 1
 }
 
+verify_managed_spine() {
+  state="$1"; adapter="$2"; skills="$3"
+  [ -f "$adapter" ] || return 0
+  has_begin=0; has_end=0
+  grep -Fqx "$BEGIN_MARKER" "$adapter" && has_begin=1
+  grep -Fqx "$END_MARKER" "$adapter" && has_end=1
+  [ "$has_begin" = 0 ] && [ "$has_end" = 0 ] && return 0
+  if [ "$has_begin" != 1 ] || [ "$has_end" != 1 ] || [ ! -f "$state" ]; then
+    echo "Managed spine marker lacks valid ownership state: $adapter" >&2; return 1
+  fi
+  python_cmd="$(resolve_python)"
+  "$python_cmd" "$REPO_ROOT/tools/verify_install_state.py" \
+    --state "$state" --adapter "$adapter" --skills "$skills" --spine ||
+    { echo "Managed spine provenance validation failed: $adapter" >&2; return 1; }
+}
+
 remove_skills() {
   # Only remove the skill folders that this bundle ships (never a whole skills dir).
   dest="$1"
@@ -105,6 +121,7 @@ uninstall_opencode() {
       --audit "$audit" --uninstall ||
       { echo "OpenCode model config uninstall failed; managed role fields were not changed." >&2; return 1; }
   fi
+  verify_managed_spine "$state" "$base/AGENTS.md" "$base/skills"
   remove_skills "$base/skills"
   SUMMARY+=("opencode: removed bundle skills from $base/skills")
   remove_spine_block "$base/AGENTS.md"
@@ -121,6 +138,7 @@ uninstall_opencode() {
 uninstall_claude() {
   base="$HOME/.claude"
   state="$base/agent-workflow-skills/install-state.json"
+  verify_managed_spine "$state" "$base/CLAUDE.md" "$base/skills"
   remove_skills "$base/skills"
   SUMMARY+=("claude: removed bundle skills from $base/skills")
   remove_spine_block "$base/CLAUDE.md"

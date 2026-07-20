@@ -11,6 +11,8 @@ OPENCODE_MODEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*(/[A-Za-z0-9][A-Za-z
 RESERVED = {"provider", "model", "placeholder", "example", "change-me", "your-provider", "your-model"}
 FORBIDDEN = ("model: ",)
 OWNER = ".agent-workflow-skills-owned"
+SPINE_BEGIN = "<!-- BEGIN agent-workflow-skills spine -->"
+SPINE_END = "<!-- END agent-workflow-skills spine -->"
 
 
 def _model(platform, role, value, nullable=False):
@@ -46,6 +48,12 @@ def _binding(path, supplied, platform):
 def _hash(path):
     """Return the content digest recorded in the owned-artifact manifest."""
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _spine_block(path):
+    source = path.read_text(encoding="utf-8")
+    source = re.sub(r"\A---\r?\n.*?\r?\n---\r?\n", "", source, count=1, flags=re.DOTALL)
+    return f"{SPINE_BEGIN}\n{source.strip()}\n{SPINE_END}".encode("utf-8")
 
 
 def _adapter_source(platform, profile):
@@ -102,6 +110,10 @@ def _stage(stage, binding_path, platform, profile, supplied):
             str(path.relative_to(stage)).replace("\\", "/"): _hash(path) for path in policy_owned
         },
     }
+    if platform in ("opencode", "claude"):
+        state["spine_block_sha256"] = hashlib.sha256(
+            _spine_block(stage / "workflow-gate.mdc")
+        ).hexdigest()
     (stage / "install-state.json").write_text(json.dumps(state, indent=2) + "\n", encoding="utf-8", newline="\n")
     portable = [stage / "workflow-gate.mdc", *(stage / "skills").glob("*/SKILL.md")]
     text = "\n".join(path.read_text(encoding="utf-8").lower() for path in portable)

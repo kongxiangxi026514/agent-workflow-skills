@@ -59,6 +59,23 @@ function Resolve-Python {
     throw 'A runnable Python 3 interpreter is required to verify managed OpenCode role fields.'
 }
 
+function Test-ManagedSpineOwnership([string]$State, [string]$Adapter, [string]$Skills) {
+    if (-not (Test-Path -LiteralPath $Adapter)) { return }
+    $content = Read-Utf8 $Adapter
+    $hasBegin = $content.Contains($BeginMarker)
+    $hasEnd = $content.Contains($EndMarker)
+    if (-not $hasBegin -and -not $hasEnd) { return }
+    if (-not $hasBegin -or -not $hasEnd -or -not (Test-Path -LiteralPath $State)) {
+        throw "Managed spine marker lacks valid ownership state: $Adapter"
+    }
+    $python = Resolve-Python
+    & $python (Join-Path $RepoRoot 'tools\verify_install_state.py') `
+        '--state' $State '--adapter' $Adapter '--skills' $Skills '--spine' | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        throw "Managed spine provenance validation failed: $Adapter"
+    }
+}
+
 function Test-SpineMarkerIntegrity([string]$File) {
     if (-not (Test-Path -LiteralPath $File)) { return }
     $content = Read-Utf8 $File
@@ -135,9 +152,10 @@ function Uninstall-OpenCode {
             throw 'OpenCode model config uninstall failed; managed role fields were not changed.'
         }
     }
+    $agents = Join-Path $base 'AGENTS.md'
+    Test-ManagedSpineOwnership $state $agents (Join-Path $base 'skills')
     Remove-Skills (Join-Path $base 'skills')
     $summary.Add("opencode: removed bundle skills from $base\skills")
-    $agents = Join-Path $base 'AGENTS.md'
     Remove-SpineBlock $agents
     $summary.Add("opencode: removed spine marker block from $agents")
     if ($owned) {
@@ -152,9 +170,10 @@ function Uninstall-OpenCode {
 function Uninstall-Claude {
     $base = Join-Path $env:USERPROFILE '.claude'
     $state = Join-Path $base 'agent-workflow-skills\install-state.json'
+    $claudeMd = Join-Path $base 'CLAUDE.md'
+    Test-ManagedSpineOwnership $state $claudeMd (Join-Path $base 'skills')
     Remove-Skills (Join-Path $base 'skills')
     $summary.Add("claude: removed bundle skills from $base\skills")
-    $claudeMd = Join-Path $base 'CLAUDE.md'
     Remove-SpineBlock $claudeMd
     $summary.Add("claude: removed spine marker block from $claudeMd")
     if (Test-Path $state) { Remove-Item -Force $state }

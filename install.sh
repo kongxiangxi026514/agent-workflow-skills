@@ -254,6 +254,40 @@ install_claude() {
   SUMMARY+=("claude: ownership state -> $base/agent-workflow-skills/install-state.json")
 }
 
+snapshot_targets=()
+snapshot_payloads=()
+snapshot_exists=()
+
+snapshot_target() {
+  target="$1"; payload="$2"; exists=0
+  if [ -e "$target" ]; then
+    exists=1
+    cp -a "$target" "$payload"
+  fi
+  snapshot_targets+=("$target")
+  snapshot_payloads+=("$payload")
+  snapshot_exists+=("$exists")
+}
+
+restore_snapshots() {
+  for ((index=${#snapshot_targets[@]} - 1; index>=0; index--)); do
+    target="${snapshot_targets[$index]}"
+    payload="${snapshot_payloads[$index]}"
+    exists="${snapshot_exists[$index]}"
+    rm -rf "$target"
+    if [ "$exists" = 1 ]; then
+      mkdir -p "$(dirname "$target")"
+      cp -a "$payload" "$target"
+    fi
+  done
+}
+
+inject_platform_failure() {
+  [ "${AGENT_WORKFLOW_TEST_FAIL_PLATFORM:-}" = "$1" ] &&
+    { echo "Injected all-platform failure after $1 installation." >&2; return 1; }
+  return 0
+}
+
 if { [ "$TOOL" = cursor ] || [ "$TOOL" = all ]; } && [ -z "$PROJECT" ]; then
   echo "--project is required for Cursor installation so the forced spine is installed automatically. Nothing was installed." >&2
   exit 1
@@ -295,7 +329,23 @@ case "$TOOL" in
   cursor)   install_cursor ;;
   opencode) install_opencode ;;
   claude)   install_claude ;;
-  all)      install_cursor; install_opencode; install_claude ;;
+  all)
+    all_snapshot_root="$(mktemp -d)"
+    snapshot_target "$HOME/.cursor" "$all_snapshot_root/cursor"
+    snapshot_target "$PROJECT/.cursor" "$all_snapshot_root/cursor-project"
+    snapshot_target "$OPENCODE_BASE" "$all_snapshot_root/opencode"
+    snapshot_target "$HOME/.claude" "$all_snapshot_root/claude"
+    if install_cursor && inject_platform_failure cursor &&
+      install_opencode && inject_platform_failure opencode &&
+      install_claude && inject_platform_failure claude; then
+      rm -rf "$all_snapshot_root"
+    else
+      status=$?
+      restore_snapshots
+      rm -rf "$all_snapshot_root"
+      exit "$status"
+    fi
+    ;;
   *) echo "invalid --tool: $TOOL (expected cursor|opencode|claude|all)" >&2; exit 1 ;;
 esac
 

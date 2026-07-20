@@ -24,9 +24,23 @@ def _spine_body(path: Path) -> bytes:
     return (body + "\n").encode("utf-8")
 
 
+def _spine_block(path: Path) -> bytes:
+    text = path.read_text(encoding="utf-8")
+    if text.count(BEGIN) != 1 or text.count(END) != 1:
+        raise ValueError(f"corrupted spine markers: {path}")
+    body = text.split(BEGIN, 1)[1].split(END, 1)[0].strip("\r\n")
+    return f"{BEGIN}\n{body}\n{END}".encode("utf-8")
+
+
 def verify(state_path: Path, adapter_path: Path, skills_dir: Path, spine: bool) -> None:
     """Raise when a previously installed generated policy artifact drifted."""
     state = json.loads(state_path.read_text(encoding="utf-8"))
+    if spine and adapter_path.exists() and BEGIN in adapter_path.read_text(encoding="utf-8"):
+        expected_block = state.get("spine_block_sha256")
+        if not isinstance(expected_block, str):
+            raise ValueError(f"missing managed spine provenance: {state_path}")
+        if hashlib.sha256(_spine_block(adapter_path)).hexdigest() != expected_block:
+            raise ValueError(f"generated spine drift: {adapter_path}")
     owned = state.get("policy_owned_sha256", {})
     if not owned:
         return

@@ -40,11 +40,13 @@ ROLE_NAMES = tuple(ROLE_FIELDS)
 YAML_KEY = re.compile(
     r"""^(?P<indent> *)(?P<key>[A-Za-z_][A-Za-z0-9_.-]*|"[^"\\]*(?:\\.[^"\\]*)*"|'[^'\\]*(?:\\.[^'\\]*)*')\s*:(?P<value>.*)$"""
 )
-MODEL_KEY = re.compile(r"""^(?:model|"model"|'model')$""")
+MODEL_KEY = re.compile(r"""^(?:model|"model"|'model')$""", re.IGNORECASE)
 AUDIT_VERSION = 1
 BUNDLE = "agent-workflow-skills"
 MANAGED_MARKER = "<!-- Managed by agent-workflow-skills. -->"
 UTF8_BOM = b"\xef\xbb\xbf"
+SPINE_BEGIN = "<!-- BEGIN agent-workflow-skills spine -->"
+SPINE_END = "<!-- END agent-workflow-skills spine -->"
 
 
 class MigrationError(ValueError):
@@ -334,14 +336,19 @@ def _config_after_migration(data: dict, models: dict[str, str]) -> tuple[dict, d
             raise MigrationError(f"OpenCode agent.{role} must be an object")
         if existing:
             updated = copy.deepcopy(current)
-            if role == "review" and "permission" in updated:
-                permission = updated["permission"]
-                if not isinstance(permission, dict) or (
-                    "edit" in permission and permission["edit"] != "deny"
-                ):
-                    raise MigrationError(
-                        "OpenCode agent.review permission.edit must be deny when present"
-                    )
+            if role == "review":
+                if "permission" not in updated:
+                    updated["permission"] = {"edit": "deny"}
+                else:
+                    permission = updated["permission"]
+                    if not isinstance(permission, dict) or (
+                        "edit" in permission and permission["edit"] != "deny"
+                    ):
+                        raise MigrationError(
+                            "OpenCode agent.review permission.edit must be deny when present"
+                        )
+                    if "edit" not in permission:
+                        permission["edit"] = "deny"
             updated["model"] = models[role]
         else:
             updated = {**copy.deepcopy(ROLE_FIELDS[role]), "model": models[role]}
@@ -799,6 +806,43 @@ def _spine_text(existing: bytes | None, adapter: bytes) -> bytes:
     return ((content.rstrip() + ("\n\n" if content.strip() else "") + block + "\n").encode("utf-8"))
 
 
+def _spine_block_digest(content: bytes) -> str | None:
+    text = content.decode("utf-8-sig")
+    if SPINE_BEGIN not in text and SPINE_END not in text:
+        return None
+    if text.count(SPINE_BEGIN) != 1 or text.count(SPINE_END) != 1:
+        raise MigrationError("corrupted agent-workflow-skills spine markers")
+    body = text.split(SPINE_BEGIN, 1)[1].split(SPINE_END, 1)[0].strip("\r\n")
+    return _sha256(f"{SPINE_BEGIN}\n{body}\n{SPINE_END}".encode("utf-8"))
+
+
+def _verify_spine_ownership(base: Path, state_dir: Path, content: bytes | None) -> None:
+    if content is None:
+        return
+    digest = _spine_block_digest(content)
+    if digest is None:
+        return
+    state_path = _assert_safe_path(base, state_dir / "install-state.json")
+    if not state_path.exists():
+        raise MigrationError(
+            "existing managed spine marker has no valid ownership state"
+        )
+    try:
+        state = parse_jsonc(state_path.read_bytes().decode("utf-8-sig"))
+    except (OSError, UnicodeError, ValueError, json.JSONDecodeError) as error:
+        raise MigrationError(f"invalid managed spine state: {error}") from error
+    if (
+        not isinstance(state, dict)
+        or state.get("bundle") != BUNDLE
+        or state.get("platform") != "opencode"
+        or not isinstance(state.get("spine_block_sha256"), str)
+        or state["spine_block_sha256"] != digest
+    ):
+        raise MigrationError(
+            "existing managed spine marker lacks valid hash provenance"
+        )
+
+
 def _bundle_changes(base: Path, stage: Path, state_dir: Path) -> list[Change]:
     stage = _assert_no_reparse_path(stage)
     _assert_external_tree_no_reparse(stage)
@@ -830,6 +874,7 @@ def _bundle_changes(base: Path, stage: Path, state_dir: Path) -> list[Change]:
     if not adapter.is_file():
         raise MigrationError(f"required staged artifact is missing: {adapter}")
     before = agents.read_bytes() if agents.exists() else None
+    _verify_spine_ownership(base, state_dir, before)
     after = _spine_text(before, adapter.read_bytes())
     if before != after:
         changes.append(Change(agents, before, after, _file_mode(agents)))
