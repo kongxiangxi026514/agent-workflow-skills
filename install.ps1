@@ -147,24 +147,36 @@ function Test-CursorOwnership {
     $rules = if ($Project) { Join-Path $Project '.cursor\rules' } else { $null }
     $bundle = if ($Project) { Join-Path $Project '.cursor\agent-workflow-skills' } else { $null }
     $state = if ($bundle) { Join-Path $bundle 'install-state.json' } else { $null }
-    $candidate = $state -and (Test-Path -LiteralPath $state)
+    $globalCandidate = $false
+    foreach ($source in Get-ChildItem -Directory -LiteralPath (Join-Path $RepoRoot 'policy-v3\generated\skills')) {
+        $globalCandidate = $globalCandidate -or (Test-Path -LiteralPath (Join-Path $skills $source.Name))
+    }
+    $projectCandidate = $state -and (Test-Path -LiteralPath $state)
+    if ($bundle -and (Test-Path -LiteralPath $bundle) -and (Get-ChildItem -Force -LiteralPath $bundle | Select-Object -First 1)) {
+        $projectCandidate = $true
+    }
     if ($Project) {
         foreach ($name in @('workflow-gate.mdc', 'model-routing.mdc')) {
-            $candidate = $candidate -or (Test-Path -LiteralPath (Join-Path $rules $name))
+            $projectCandidate = $projectCandidate -or (Test-Path -LiteralPath (Join-Path $rules $name))
         }
     }
-    foreach ($source in Get-ChildItem -Directory -LiteralPath (Join-Path $RepoRoot 'policy-v3\generated\skills')) {
-        $candidate = $candidate -or (Test-Path -LiteralPath (Join-Path $skills $source.Name))
-    }
-    if (-not $candidate) { return }
-    if (-not $Project -or -not (Test-Path -LiteralPath $state)) {
-        throw 'Cursor bundle artifacts require -Project and a valid install-state.json. Nothing was installed.'
-    }
     $python = Resolve-Python
-    & $python (Join-Path $RepoRoot 'tools\verify_cursor_ownership.py') `
-        '--state' $state '--rules' $rules '--skills' $skills '--bundle' $bundle | Out-Null
-    if ($LASTEXITCODE -ne 0) {
-        throw 'Cursor ownership validation failed. Nothing was installed.'
+    if ($globalCandidate) {
+        & $python (Join-Path $RepoRoot 'tools\verify_cursor_ownership.py') `
+            '--skills' $skills '--source-skills' (Join-Path $RepoRoot 'policy-v3\generated\skills') | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            throw 'Cursor global skill ownership validation failed. Nothing was installed.'
+        }
+    }
+    if ($projectCandidate) {
+        if (-not $Project -or -not (Test-Path -LiteralPath $state)) {
+            throw 'Cursor project artifacts require a valid project install-state.json. Nothing was installed.'
+        }
+        & $python (Join-Path $RepoRoot 'tools\verify_cursor_ownership.py') `
+            '--state' $state '--rules' $rules '--skills' $skills '--bundle' $bundle | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            throw 'Cursor project ownership validation failed. Nothing was installed.'
+        }
     }
 }
 

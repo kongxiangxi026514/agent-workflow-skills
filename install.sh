@@ -152,27 +152,37 @@ preflight_opencode() {
 
 verify_cursor_ownership() {
   skills="$HOME/.cursor/skills"
-  candidate=0
+  global_candidate=0
   if [ -n "$PROJECT" ]; then
     rules="$PROJECT/.cursor/rules"
     bundle="$PROJECT/.cursor/agent-workflow-skills"
     state="$bundle/install-state.json"
-    [ ! -f "$state" ] || candidate=1
-    [ ! -e "$rules/workflow-gate.mdc" ] || candidate=1
-    [ ! -e "$rules/model-routing.mdc" ] || candidate=1
+    project_candidate=0
+    [ ! -f "$state" ] || project_candidate=1
+    [ ! -d "$bundle" ] || [ -z "$(ls -A "$bundle")" ] || project_candidate=1
+    [ ! -e "$rules/workflow-gate.mdc" ] || project_candidate=1
+    [ ! -e "$rules/model-routing.mdc" ] || project_candidate=1
+  else
+    project_candidate=0
   fi
   for source in "$REPO_ROOT"/policy-v3/generated/skills/*/; do
-    [ ! -e "$skills/$(basename "$source")" ] || candidate=1
+    [ ! -e "$skills/$(basename "$source")" ] || global_candidate=1
   done
-  [ "$candidate" = 0 ] && return 0
-  if [ -z "$PROJECT" ] || [ ! -f "$state" ]; then
-    echo "Cursor bundle artifacts require --project and a valid install-state.json. Nothing was installed." >&2
-    return 1
-  fi
   python_cmd="$(resolve_python)"
-  "$python_cmd" "$REPO_ROOT/tools/verify_cursor_ownership.py" \
-    --state "$state" --rules "$rules" --skills "$skills" --bundle "$bundle" ||
-    { echo "Cursor ownership validation failed. Nothing was installed." >&2; return 1; }
+  if [ "$global_candidate" = 1 ]; then
+    "$python_cmd" "$REPO_ROOT/tools/verify_cursor_ownership.py" \
+      --skills "$skills" --source-skills "$REPO_ROOT/policy-v3/generated/skills" ||
+      { echo "Cursor global skill ownership validation failed. Nothing was installed." >&2; return 1; }
+  fi
+  if [ "$project_candidate" = 1 ]; then
+    if [ -z "$PROJECT" ] || [ ! -f "$state" ]; then
+      echo "Cursor project artifacts require a valid project install-state.json. Nothing was installed." >&2
+      return 1
+    fi
+    "$python_cmd" "$REPO_ROOT/tools/verify_cursor_ownership.py" \
+      --state "$state" --rules "$rules" --skills "$skills" --bundle "$bundle" ||
+      { echo "Cursor project ownership validation failed. Nothing was installed." >&2; return 1; }
+  fi
 }
 
 preflight_skills() {
