@@ -11,12 +11,14 @@ import re
 import shutil
 import stat
 import sys
+import tempfile
 import uuid
+from datetime import datetime, timezone
 from dataclasses import dataclass
 from pathlib import Path
 
 from dispatch_resolver import DispatchResolutionError, _load_binding
-from validate_jsonc import normalize_jsonc
+from validate_jsonc import parse_jsonc
 
 
 ROLE_FIELDS = {
@@ -38,6 +40,8 @@ ROLE_NAMES = tuple(ROLE_FIELDS)
 MODEL_LINE = re.compile(r"^model\s*:", re.IGNORECASE)
 AUDIT_VERSION = 1
 BUNDLE = "agent-workflow-skills"
+MANAGED_MARKER = "<!-- Managed by agent-workflow-skills. -->"
+UTF8_BOM = b"\xef\xbb\xbf"
 
 
 class MigrationError(ValueError):
@@ -49,6 +53,7 @@ class Change:
     path: Path
     before: bytes | None
     after: bytes | None
+    mode: int | None = None
 
 
 def _sha256(content: bytes) -> str:
@@ -84,6 +89,76 @@ def _assert_safe_path(base: Path, path: Path) -> Path:
             break
         current = current.parent
     return path
+
+
+def _assert_no_reparse_path(path: Path) -> Path:
+    """Validate an external read-only input such as a staged binding."""
+    path = _absolute(path)
+    current = path
+    while True:
+        if _has_reparse_point(current):
+            raise MigrationError(f"reparse or symlink paths are not supported: {current}")
+        if current.parent == current:
+            break
+        current = current.parent
+    return path
+
+
+def _assert_tree_no_reparse(base: Path, root: Path) -> None:
+    """Reject symlink/reparse descendants before recursively reading or writing."""
+    root = _assert_safe_path(base, root)
+    if not root.exists():
+        return
+    if not root.is_dir():
+        return
+    for entry in os.scandir(root):
+        path = _assert_safe_path(base, Path(entry.path))
+        if _has_reparse_point(path):
+            raise MigrationError(f"reparse or symlink paths are not supported: {path}")
+        if entry.is_dir(follow_symlinks=False):
+            _assert_tree_no_reparse(base, path)
+
+
+def _file_mode(path: Path) -> int | None:
+    if not path.exists():
+        return None
+    metadata = os.lstat(path)
+    if not stat.S_ISREG(metadata.st_mode):
+        raise MigrationError(f"expected regular file: {path}")
+    return stat.S_IMODE(metadata.st_mode)
+
+
+def _restrictive_mode(mode: int | None) -> int:
+    """Preserve an existing owner mode or make the replacement stricter."""
+    return 0o600 if mode is None else mode & 0o600
+
+
+def _ensure_dir(path: Path) -> None:
+    """Create missing directories privately without widening existing permissions."""
+    missing = []
+    current = path
+    while not current.exists():
+        missing.append(current)
+        current = current.parent
+    if _has_reparse_point(current):
+        raise MigrationError(f"reparse or symlink paths are not supported: {current}")
+    for directory in reversed(missing):
+        directory.mkdir(mode=0o700)
+
+
+def _check_writable_parent(path: Path) -> None:
+    """Prove an existing parent accepts private temporary files before mutation."""
+    parent = path.parent
+    while not parent.exists():
+        parent = parent.parent
+    if _has_reparse_point(parent):
+        raise MigrationError(f"reparse or symlink paths are not supported: {parent}")
+    try:
+        descriptor, temporary = tempfile.mkstemp(prefix=".agent-workflow-check-", dir=parent)
+        os.close(descriptor)
+        Path(temporary).unlink()
+    except OSError as error:
+        raise MigrationError(f"cannot write migration target near {path}: {error}") from error
 
 
 def _same_path(left: Path, right: Path) -> bool:
@@ -127,7 +202,7 @@ def _read_jsonc_object(path: Path) -> dict:
     if not path.exists():
         return {}
     try:
-        data = json.loads(normalize_jsonc(path.read_bytes().decode("utf-8-sig")))
+        data = parse_jsonc(path.read_bytes().decode("utf-8-sig"))
     except (OSError, UnicodeError, ValueError, json.JSONDecodeError) as error:
         raise MigrationError(f"invalid OpenCode JSON/JSONC config: {error}") from error
     if not isinstance(data, dict):
@@ -175,66 +250,145 @@ def _strip_model_frontmatter(text: str) -> str:
     return "".join([lines[0], *frontmatter, lines[end], *lines[end + 1 :]])
 
 
+def _legacy_owned_roles(base: Path, state_dir: Path) -> dict[str, str]:
+    state_path = _assert_safe_path(base, state_dir / "install-state.json")
+    if not state_path.exists():
+        return {}
+    try:
+        state = parse_jsonc(state_path.read_bytes().decode("utf-8-sig"))
+    except (OSError, UnicodeError, ValueError, json.JSONDecodeError) as error:
+        raise MigrationError(f"invalid legacy install state: {error}") from error
+    if not isinstance(state, dict) or state.get("bundle") != BUNDLE:
+        return {}
+    owned = state.get("owned_sha256", {})
+    if not isinstance(owned, dict):
+        return {}
+    return {
+        key: value
+        for key, value in owned.items()
+        if isinstance(key, str) and isinstance(value, str)
+    }
+
+
+def _walk_agents(base: Path, agents: Path):
+    _assert_tree_no_reparse(base, agents)
+    for root, directories, files in os.walk(agents, followlinks=False):
+        directories.sort()
+        files.sort()
+        for name in files:
+            if Path(name).suffix.lower() == ".md":
+                yield _assert_safe_path(base, Path(root) / name)
+
+
 def _markdown_changes(base: Path, state_dir: Path) -> list[Change]:
     agents = _assert_safe_path(base, base / "agents")
     if not agents.exists():
         return []
     if not agents.is_dir():
         raise MigrationError(f"OpenCode agents path is not a directory: {agents}")
+    owned = _legacy_owned_roles(base, state_dir)
     changes = []
-    for path in sorted(agents.iterdir()):
-        if path.suffix.lower() != ".md":
-            continue
-        path = _assert_safe_path(base, path)
+    for path in _walk_agents(base, agents):
         if not path.is_file():
             raise MigrationError(f"OpenCode agent is not a regular Markdown file: {path}")
         try:
             before = path.read_bytes()
-            after = _strip_model_frontmatter(before.decode("utf-8")).encode("utf-8")
+            has_bom = before.startswith(UTF8_BOM)
+            after = _strip_model_frontmatter(
+                before.decode("utf-8-sig")
+            ).encode("utf-8")
+            if has_bom:
+                after = UTF8_BOM + after
         except UnicodeError as error:
             raise MigrationError(f"OpenCode Markdown agent is not UTF-8: {path}") from error
         if path.stem not in ROLE_NAMES:
             if after != before:
-                changes.append(Change(path, before, after))
+                changes.append(Change(path, before, after, _file_mode(path)))
             continue
-        retired = _assert_safe_path(base, state_dir / "retired-agents" / path.name)
+        relative = path.relative_to(agents).as_posix()
+        state_key = f"agents/{relative}"
+        if (
+            MANAGED_MARKER not in before.decode("utf-8-sig")
+            or owned.get(state_key) != _sha256(before)
+        ):
+            raise MigrationError(
+                f"named role agent is not bundle-owned: {path}. "
+                "Rename or migrate the custom role manually before retrying."
+            )
+        retired = _assert_safe_path(
+            base, state_dir / "retired-agents" / relative
+        )
         if retired.exists():
             raise MigrationError(f"retired role-agent destination already exists: {retired}")
-        changes.extend((Change(retired, None, after), Change(path, before, None)))
+        changes.extend(
+            (
+                Change(retired, None, after),
+                Change(path, before, None, _file_mode(path)),
+            )
+        )
     return changes
 
 
-def _write_atomic(path: Path, content: bytes) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
+def _write_atomic(path: Path, content: bytes, mode: int | None = None) -> None:
+    _ensure_dir(path.parent)
     temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    descriptor = None
     try:
-        temporary.write_bytes(content)
+        descriptor = os.open(
+            temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600
+        )
+        with os.fdopen(descriptor, "wb", closefd=False) as file:
+            file.write(content)
+            file.flush()
+            os.fsync(file.fileno())
+        os.fchmod(descriptor, _restrictive_mode(mode))
+        os.close(descriptor)
+        descriptor = None
         os.replace(temporary, path)
     finally:
+        if descriptor is not None:
+            os.close(descriptor)
         temporary.unlink(missing_ok=True)
 
 
-def _apply_changes(
+def _restore_change(change: Change) -> None:
+    if change.before is None:
+        change.path.unlink(missing_ok=True)
+    else:
+        _write_atomic(change.path, change.before, change.mode)
+
+
+def _remove_empty_parents(path: Path, base: Path) -> None:
+    current = path
+    while current != base:
+        try:
+            current.rmdir()
+        except OSError:
+            return
+        current = current.parent
+
+
+def _apply_transaction(
     changes: list[Change],
     *,
     fail_after_write: int | None = None,
+    base: Path,
 ) -> None:
-    applied = 0
+    applied: list[Change] = []
     try:
         for change in changes:
             if change.after is None:
                 change.path.unlink(missing_ok=True)
             else:
-                _write_atomic(change.path, change.after)
-            applied += 1
-            if fail_after_write is not None and applied >= fail_after_write:
+                _write_atomic(change.path, change.after, change.mode)
+            applied.append(change)
+            if fail_after_write is not None and len(applied) >= fail_after_write:
                 raise OSError("failure injection requested")
     except OSError:
-        for change in reversed(changes[:applied]):
-            if change.before is None:
-                change.path.unlink(missing_ok=True)
-            else:
-                _write_atomic(change.path, change.before)
+        for change in reversed(applied):
+            _restore_change(change)
+        for change in reversed(applied):
+            _remove_empty_parents(change.path.parent, base)
         raise
 
 
@@ -270,6 +424,86 @@ def _audit_payload(
     }
 
 
+def _backup_id(value: str | None) -> str:
+    if value is None:
+        return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ-") + uuid.uuid4().hex
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", value):
+        raise MigrationError("backup identifier must contain only letters, digits, _ or -")
+    return value
+
+
+def _preflight_migration_targets(
+    base: Path, state_dir: Path, audit: Path, backup_root: Path
+) -> None:
+    """Validate every migration state/backup destination before outer writes."""
+    _assert_tree_no_reparse(base, state_dir)
+    backups = _assert_safe_path(base, state_dir / "migration-backups")
+    _assert_tree_no_reparse(base, backups)
+    if backup_root.exists():
+        raise MigrationError(f"migration backup target already exists: {backup_root}")
+    if audit.exists() and not audit.is_file():
+        raise MigrationError(f"migration audit path is not a regular file: {audit}")
+    for target in (state_dir, backups, backup_root, audit):
+        _assert_safe_path(base, target)
+        _check_writable_parent(target)
+
+
+@dataclass(frozen=True)
+class MigrationPlan:
+    base: Path
+    state_dir: Path
+    backup_root: Path
+    changes: tuple[Change, ...]
+
+
+def build_migration_plan(
+    base: Path,
+    binding: Path,
+    audit: Path,
+    explicit: str | None,
+    backup_id: str | None = None,
+) -> MigrationPlan:
+    base = _absolute(base)
+    state_dir = _assert_safe_path(base, audit.parent)
+    audit = _assert_safe_path(base, audit)
+    binding = _assert_no_reparse_path(binding)
+    selected = select_config(base, explicit)
+    _assert_tree_no_reparse(base, selected.parent)
+    data = _read_jsonc_object(selected)
+    models = _models(binding)
+    updated, managed = _config_after_migration(data, models)
+    config_before = selected.read_bytes() if selected.exists() else None
+    config_after = (json.dumps(updated, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+    changes = [Change(selected, config_before, config_after, _file_mode(selected))]
+    changes.extend(_markdown_changes(base, state_dir))
+    backup_root = _assert_safe_path(
+        base, state_dir / "migration-backups" / _backup_id(backup_id)
+    )
+    _preflight_migration_targets(base, state_dir, audit, backup_root)
+    payload = _audit_payload(base, selected, changes, managed, backup_root)
+    audit_after = (json.dumps(payload, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+    existing_audit = audit.read_bytes() if audit.exists() else None
+    audit_mode = _file_mode(audit)
+    backup_changes = [
+        Change(
+            _assert_safe_path(base, backup_root / change.path.relative_to(base)),
+            None,
+            change.before,
+            change.mode,
+        )
+        for change in changes
+        if change.before is not None
+    ]
+    return MigrationPlan(
+        base=base,
+        state_dir=state_dir,
+        backup_root=backup_root,
+        changes=tuple(
+            [*backup_changes, *changes, Change(audit, existing_audit, audit_after, audit_mode)]
+        ),
+    )
+
+
 def migrate(
     base: Path,
     binding: Path,
@@ -277,45 +511,196 @@ def migrate(
     explicit: str | None,
     fail_after_write: int | None = None,
     check: bool = False,
+    backup_id: str | None = None,
 ) -> None:
-    base = _absolute(base)
-    state_dir = _assert_safe_path(base, audit.parent)
-    audit = _assert_safe_path(base, audit)
-    selected = select_config(base, explicit)
-    data = _read_jsonc_object(selected)
-    models = _models(binding)
-    updated, managed = _config_after_migration(data, models)
-    config_before = selected.read_bytes() if selected.exists() else None
-    config_after = (json.dumps(updated, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
-    changes = [Change(selected, config_before, config_after)]
-    changes.extend(_markdown_changes(base, state_dir))
+    plan = build_migration_plan(base, binding, audit, explicit, backup_id)
     if check:
         return
-    backup_root = state_dir / "migration-backups" / uuid.uuid4().hex
-    payload = _audit_payload(base, selected, changes, managed, backup_root)
-    audit_after = (json.dumps(payload, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
-    existing_audit = audit.read_bytes() if audit.exists() else None
-    backup_changes = [
-        Change(backup_root / change.path.relative_to(base), None, change.before)
-        for change in changes
-        if change.before is not None
-    ]
     try:
-        _apply_changes(backup_changes)
-        _apply_changes(changes, fail_after_write=fail_after_write)
-        _write_atomic(audit, audit_after)
+        _apply_transaction(
+            list(plan.changes),
+            fail_after_write=fail_after_write,
+            base=plan.base,
+        )
     except OSError as error:
-        for change in reversed(changes):
-            if change.before is None:
-                change.path.unlink(missing_ok=True)
-            else:
-                _write_atomic(change.path, change.before)
-        if existing_audit is None:
-            audit.unlink(missing_ok=True)
-        else:
-            _write_atomic(audit, existing_audit)
-        shutil.rmtree(backup_root, ignore_errors=True)
+        shutil.rmtree(plan.backup_root, ignore_errors=True)
+        _remove_empty_parents(plan.backup_root.parent, plan.state_dir)
         raise MigrationError(f"migration rolled back: {error}") from error
+
+
+def _assert_external_tree_no_reparse(root: Path) -> None:
+    root = _assert_no_reparse_path(root)
+    if not root.exists():
+        raise MigrationError(f"required staged artifact is missing: {root}")
+    if root.is_dir():
+        for entry in os.scandir(root):
+            path = Path(entry.path)
+            if _has_reparse_point(path):
+                raise MigrationError(f"staged artifact uses a reparse path: {path}")
+            if entry.is_dir(follow_symlinks=False):
+                _assert_external_tree_no_reparse(path)
+
+
+def _tree_files(root: Path) -> dict[Path, bytes]:
+    _assert_external_tree_no_reparse(root)
+    if not root.is_dir():
+        raise MigrationError(f"expected directory: {root}")
+    result = {}
+    for directory, _, files in os.walk(root, followlinks=False):
+        for name in sorted(files):
+            path = Path(directory) / name
+            if _has_reparse_point(path) or not path.is_file():
+                raise MigrationError(f"expected regular staged file: {path}")
+            result[path.relative_to(root)] = path.read_bytes()
+    return result
+
+
+def _changes_for_tree(base: Path, source: Path, destination: Path) -> list[Change]:
+    desired = _tree_files(source)
+    destination = _assert_safe_path(base, destination)
+    if destination.exists():
+        if not destination.is_dir():
+            raise MigrationError(f"expected directory: {destination}")
+        _assert_tree_no_reparse(base, destination)
+        existing = {
+            path.relative_to(destination): path.read_bytes()
+            for path in destination.rglob("*")
+            if path.is_file()
+        }
+    else:
+        existing = {}
+    changes = []
+    for relative in sorted(desired):
+        target = _assert_safe_path(base, destination / relative)
+        before = existing.get(relative)
+        if before != desired[relative]:
+            changes.append(Change(target, before, desired[relative], _file_mode(target)))
+    for relative in sorted(set(existing) - set(desired), reverse=True):
+        target = _assert_safe_path(base, destination / relative)
+        changes.append(Change(target, existing[relative], None, _file_mode(target)))
+    return changes
+
+
+def _spine_text(existing: bytes | None, adapter: bytes) -> bytes:
+    try:
+        content = "" if existing is None else existing.decode("utf-8-sig")
+        source = adapter.decode("utf-8")
+    except UnicodeError as error:
+        raise MigrationError(f"OpenCode spine is not UTF-8: {error}") from error
+    begin_count = content.count("<!-- BEGIN agent-workflow-skills spine -->")
+    end_count = content.count("<!-- END agent-workflow-skills spine -->")
+    if (begin_count, end_count) not in {(0, 0), (1, 1)}:
+        raise MigrationError("corrupted agent-workflow-skills spine markers")
+    body = re.sub(
+        r"\A---\r?\n.*?\r?\n---\r?\n",
+        "",
+        source,
+        count=1,
+        flags=re.DOTALL,
+    ).strip()
+    block = (
+        "<!-- BEGIN agent-workflow-skills spine -->\n"
+        f"{body}\n"
+        "<!-- END agent-workflow-skills spine -->"
+    )
+    if begin_count:
+        start = content.index("<!-- BEGIN agent-workflow-skills spine -->")
+        end = content.index("<!-- END agent-workflow-skills spine -->")
+        if end < start:
+            raise MigrationError("corrupted agent-workflow-skills spine markers")
+        return (content[:start] + block + content[end + len("<!-- END agent-workflow-skills spine -->") :]).encode("utf-8")
+    return ((content.rstrip() + ("\n\n" if content.strip() else "") + block + "\n").encode("utf-8"))
+
+
+def _bundle_changes(base: Path, stage: Path, state_dir: Path) -> list[Change]:
+    stage = _assert_no_reparse_path(stage)
+    _assert_external_tree_no_reparse(stage)
+    skills_source = stage / "skills"
+    _assert_external_tree_no_reparse(skills_source)
+    skills_destination = _assert_safe_path(base, base / "skills")
+    changes = []
+    for source in sorted(skills_source.iterdir()):
+        if not source.is_dir():
+            continue
+        destination = _assert_safe_path(base, skills_destination / source.name)
+        if destination.exists():
+            marker = destination / ".agent-workflow-skills-owned"
+            if not marker.is_file():
+                raise MigrationError(
+                    f"skill already exists and is not bundle-owned: {destination}"
+                )
+        changes.extend(_changes_for_tree(base, source, destination))
+    agents = _assert_safe_path(base, base / "AGENTS.md")
+    adapter = stage / "workflow-gate.mdc"
+    if not adapter.is_file():
+        raise MigrationError(f"required staged artifact is missing: {adapter}")
+    before = agents.read_bytes() if agents.exists() else None
+    after = _spine_text(before, adapter.read_bytes())
+    if before != after:
+        changes.append(Change(agents, before, after, _file_mode(agents)))
+    for name in (
+        "model-routing.jsonc",
+        "dispatch_resolver.py",
+        "validate_jsonc.py",
+        "install-state.json",
+    ):
+        source = stage / name
+        if not source.is_file():
+            raise MigrationError(f"required staged artifact is missing: {source}")
+        target = _assert_safe_path(base, state_dir / name)
+        before = target.read_bytes() if target.exists() else None
+        after = source.read_bytes()
+        if before != after:
+            changes.append(Change(target, before, after, _file_mode(target)))
+    for change in changes:
+        _check_writable_parent(change.path)
+    return changes
+
+
+def install_transaction(
+    base: Path,
+    binding: Path,
+    audit: Path,
+    explicit: str | None,
+    stage: Path,
+    *,
+    check: bool = False,
+    fail_after_write: int | None = None,
+    backup_id: str | None = None,
+) -> None:
+    plan = build_migration_plan(base, binding, audit, explicit, backup_id)
+    outer = _bundle_changes(plan.base, stage, plan.state_dir)
+    if check:
+        return
+    try:
+        _apply_transaction(
+            [*plan.changes, *outer],
+            fail_after_write=fail_after_write,
+            base=plan.base,
+        )
+    except OSError as error:
+        shutil.rmtree(plan.backup_root, ignore_errors=True)
+        _remove_empty_parents(plan.backup_root.parent, plan.state_dir)
+        raise MigrationError(f"OpenCode install rolled back: {error}") from error
+
+
+def _failure_injection(value: int | None) -> int | None:
+    if value is not None:
+        return value
+    raw = os.environ.get("AGENT_WORKFLOW_OPENCODE_TRANSACTION_FAIL_AFTER")
+    if raw is None:
+        return None
+    try:
+        injected = int(raw)
+    except ValueError as error:
+        raise MigrationError(
+            "AGENT_WORKFLOW_OPENCODE_TRANSACTION_FAIL_AFTER must be an integer"
+        ) from error
+    if injected < 1:
+        raise MigrationError(
+            "AGENT_WORKFLOW_OPENCODE_TRANSACTION_FAIL_AFTER must be positive"
+        )
+    return injected
 
 
 def _validate_audit(audit: dict) -> tuple[str, dict]:
@@ -340,14 +725,16 @@ def uninstall(base: Path, audit_path: Path) -> None:
     audit_path = _assert_safe_path(base, audit_path)
     if not audit_path.exists():
         return
+    _assert_tree_no_reparse(base, audit_path.parent)
     try:
-        audit = json.loads(audit_path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        audit = parse_jsonc(audit_path.read_bytes().decode("utf-8-sig"))
+    except (OSError, UnicodeError, ValueError, json.JSONDecodeError) as error:
         raise MigrationError(f"invalid OpenCode model migration audit: {error}") from error
     config_relative, managed = _validate_audit(audit)
     config = _assert_safe_path(base, base / config_relative)
     if config.name not in {"opencode.json", "opencode.jsonc"} or not config.exists():
         raise MigrationError("managed OpenCode config is missing or invalid")
+    _assert_tree_no_reparse(base, config.parent)
     data = _read_jsonc_object(config)
     roles = data.get("agent")
     if not isinstance(roles, dict):
@@ -364,12 +751,13 @@ def uninstall(base: Path, audit_path: Path) -> None:
     if not roles:
         del data["agent"]
     before = config.read_bytes()
+    mode = _file_mode(config)
     after = (json.dumps(data, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
     try:
-        _write_atomic(config, after)
+        _write_atomic(config, after, mode)
         audit_path.unlink()
     except OSError as error:
-        _write_atomic(config, before)
+        _write_atomic(config, before, mode)
         raise MigrationError(f"uninstall rolled back: {error}") from error
 
 
@@ -382,22 +770,36 @@ def main() -> int:
     parser.add_argument("--uninstall", action="store_true")
     parser.add_argument("--check", action="store_true")
     parser.add_argument("--fail-after-write", type=int)
+    parser.add_argument("--backup-id")
+    parser.add_argument("--stage", type=Path)
     args = parser.parse_args()
     try:
         if args.fail_after_write is not None and args.fail_after_write < 1:
             raise MigrationError("--fail-after-write must be positive")
         if args.uninstall:
-            if args.fail_after_write is not None or args.check:
-                raise MigrationError("--check and --fail-after-write are only valid for migration")
+            if args.fail_after_write is not None or args.check or args.backup_id or args.stage:
+                raise MigrationError("--check, --backup-id, --stage and --fail-after-write are only valid for migration")
             uninstall(args.config_dir, args.audit)
+        elif args.stage:
+            install_transaction(
+                args.config_dir,
+                args.binding,
+                args.audit,
+                args.opencode_model_config,
+                args.stage,
+                check=args.check,
+                fail_after_write=_failure_injection(args.fail_after_write),
+                backup_id=args.backup_id,
+            )
         else:
             migrate(
                 args.config_dir,
                 args.binding,
                 args.audit,
                 args.opencode_model_config,
-                args.fail_after_write,
+                _failure_injection(args.fail_after_write),
                 args.check,
+                args.backup_id,
             )
     except (MigrationError, OSError, UnicodeError) as error:
         print(f"OpenCode model migration failed: {error}", file=sys.stderr)
