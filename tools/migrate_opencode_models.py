@@ -37,6 +37,7 @@ ROLE_FIELDS = {
     },
 }
 ROLE_NAMES = tuple(ROLE_FIELDS)
+AGENT_ROOTS = ("agent", "agents")
 YAML_KEY = re.compile(
     r"""^(?P<indent> *)(?P<key>[A-Za-z_][A-Za-z0-9_.-]*|"[^"\\]*(?:\\.[^"\\]*)*"|'[^'\\]*(?:\\.[^'\\]*)*')\s*:(?P<value>.*)$"""
 )
@@ -449,9 +450,9 @@ def _owned_manifest(base: Path, state_dir: Path) -> dict[str, str] | None:
     }
 
 
-def _walk_agents(base: Path, agents: Path):
-    _assert_tree_no_reparse(base, agents)
-    for root, directories, files in os.walk(agents, followlinks=False):
+def _walk_agents(base: Path, root_name: str, root_path: Path):
+    _assert_tree_no_reparse(base, root_path)
+    for root, directories, files in os.walk(root_path, followlinks=False):
         directories.sort()
         files.sort()
         for name in files:
@@ -460,14 +461,27 @@ def _walk_agents(base: Path, agents: Path):
 
 
 def _markdown_changes(base: Path, state_dir: Path) -> list[Change]:
-    agents = _assert_safe_path(base, base / "agents")
-    if not agents.exists():
-        return []
-    if not agents.is_dir():
-        raise MigrationError(f"OpenCode agents path is not a directory: {agents}")
     owned = _owned_manifest(base, state_dir) or {}
+    active = []
+    normalized = {}
+    for root_name in AGENT_ROOTS:
+        agents = _assert_safe_path(base, base / root_name)
+        if not agents.exists():
+            continue
+        if not agents.is_dir():
+            raise MigrationError(f"OpenCode agent path is not a directory: {agents}")
+        for path in _walk_agents(base, root_name, agents):
+            relative = path.relative_to(agents)
+            name = relative.with_suffix("").as_posix().casefold()
+            if name in normalized:
+                raise MigrationError(
+                    "duplicate normalized OpenCode agent name across active roots: "
+                    f"{normalized[name]} and {root_name}/{relative.as_posix()}"
+                )
+            normalized[name] = f"{root_name}/{relative.as_posix()}"
+            active.append((root_name, agents, path, relative))
     changes = []
-    for path in _walk_agents(base, agents):
+    for root_name, agents, path, relative in active:
         if not path.is_file():
             raise MigrationError(f"OpenCode agent is not a regular Markdown file: {path}")
         try:
@@ -484,8 +498,8 @@ def _markdown_changes(base: Path, state_dir: Path) -> list[Change]:
             if after != before:
                 changes.append(Change(path, before, after, _file_mode(path)))
             continue
-        relative = path.relative_to(agents).as_posix()
-        state_key = f"agents/{relative}"
+        relative_text = relative.as_posix()
+        state_key = f"{root_name}/{relative_text}"
         if (
             MANAGED_MARKER not in before.decode("utf-8-sig")
             or owned.get(state_key) != _sha256(before)
@@ -495,7 +509,7 @@ def _markdown_changes(base: Path, state_dir: Path) -> list[Change]:
                 "Rename or migrate the custom role manually before retrying."
             )
         retired = _assert_safe_path(
-            base, state_dir / "retired-agents" / relative
+            base, state_dir / "retired-agents" / root_name / relative
         )
         if retired.exists():
             raise MigrationError(f"retired role-agent destination already exists: {retired}")
