@@ -54,6 +54,15 @@ class PublicDocumentationTests(unittest.TestCase):
         for flag in ("--tool", "--project", "--profile", "--opencode-config-dir"):
             self.assertIn(flag, install)
             self.assertIn(flag, install_sh)
+        for flag in (
+            "-MigrateOpenCodeModelConfig",
+            "-OpenCodeModelConfig",
+            "--migrate-opencode-model-config",
+            "--opencode-model-config",
+            "migration-backups",
+            "opencode-model-migration.json",
+        ):
+            self.assertIn(flag, readme + install)
 
     def test_install_lists_all_generated_skills_from_canonical_source(self):
         install = (ROOT / "INSTALL.md").read_text(encoding="utf-8")

@@ -104,9 +104,7 @@ class DispatchResolverTests(unittest.TestCase):
         self.assertTrue(cursor["read_only"])
         opencode = resolver.resolve_dispatch("opencode", "review", self.opencode)
         self.assertEqual(opencode["native_dispatch"], {"agent": "review"})
-        self.assertEqual(opencode["native_model_source"], "agent-frontmatter")
-        review_agent = (ROOT / "opencode" / "agents" / "review.md").read_text(encoding="utf-8")
-        self.assertIn("edit: deny", review_agent)
+        self.assertEqual(opencode["native_model_source"], "agent-json-config")
 
     def test_receipts_require_actual_model_evidence_for_cross_model_claims(self):
         resolver = load_resolver()
@@ -154,6 +152,9 @@ class DispatchResolverTests(unittest.TestCase):
             self.assertIn(token, cursor_rule)
         for token in ("dispatch_resolver.py", "exact native", "unverified"):
             self.assertIn(token, router)
+        self.assertNotIn("__BUILD_MODEL__", cursor_rule)
+        self.assertNotIn("__REASON_MODEL__", cursor_rule)
+        self.assertNotIn("__REVIEW_MODEL__", cursor_rule)
 
 
 if __name__ == "__main__":
