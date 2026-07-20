@@ -87,7 +87,9 @@ Cursor 全局 skills 是跨项目共享资产：安装器只按 `policy-v3/gener
 
 `build` 处理实现/重构/调试/常规架构;`reason` 仅处理非显然跨系统权衡、不确定根因或契约级多步推理;`review` 独立验证。策略可移植,具体 ID 只在各目标 binding 中。
 
-Cursor 与 OpenCode binding 完全独立。`all` 安装必须分别提供 `CursorBuild/Reason/ReviewModel` 与 `OpenCodeBuild/Reason/ReviewModel`（bash 使用对应的 `--cursor-*` / `--opencode-*`），通用参数会因存在跨平台误用风险而失败。每次原生派发前运行目标中的 `dispatch_resolver.py`;若平台提供模型列表则完整传入并验证,然后原样使用 resolver 返回的原生参数。派发后保留 receipt；看不到 `actual_model` 时 `cross_model` 只能是 `unverified`。
+Cursor 与 OpenCode binding 完全独立。`all` 安装必须分别提供 `CursorBuild/Reason/ReviewModel` 与 `OpenCodeBuild/Reason/ReviewModel`（bash 使用对应的 `--cursor-*` / `--opencode-*`），通用参数会因存在跨平台误用风险而失败。每次原生派发前运行目标中的 `dispatch_resolver.py`;若平台提供模型列表则完整传入并验证,然后原样使用 resolver 返回的原生参数。Cursor review 的原生目标是 binding 指定模型的 `generalPurpose`，不是内置 `explore`；审查只读是 agent 契约，不是本包声称由 Cursor IDE 派发 API 强制的权限。
+
+派发后保留 receipt。只有 Cursor SDK `run.model` 或 `result.model` telemetry 可填入 `actual_model`，并必须记录 `actual_model_source` 为 `cursor-sdk.run.model` 或 `cursor-sdk.result.model`。不要把 CLI `--actual-model`、UI 标签或 subagent 自报当作运行时证据；没有 SDK telemetry 时 `actual_model` 为 `null`，审查的 `cross_model` 和 `review_kind` 均为 `unverified`。
 
 ## Claude 安装(逐步)
 

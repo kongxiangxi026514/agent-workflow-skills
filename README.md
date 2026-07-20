@@ -33,6 +33,8 @@
 
 `build` 负责实现、重构和常规调试；`reason` 仅用于非显然权衡或未知根因；`review` 用于独立验证。安装后的 JSONC binding 可编辑：修改本机 binding 后重跑同一安装命令，即会刷新受管产物。`reason: null` 会复用 `build`；`review` ID 必须不同于 `build` 和有效 `reason`。安装器只验证 ID 不等性，不能从 provider 字符串推断模型家族独立性。
 
+Cursor 的 `review` 会使用 binding 中的模型与原生 `generalPurpose` 派发，不使用内置 `explore`。审查员是“只读”工作流契约：只检查和报告，不写文件；本包不声称 Cursor IDE 的该派发接口会强制只读权限，父 agent 仍负责整合与改动。只有 Cursor SDK 明确提供 `run.model` 或 `result.model` 时，receipt 才能记录 `actual_model`（并以 `cursor-sdk.run.model` 或 `cursor-sdk.result.model` 标明 `actual_model_source`）；CLI 参数、UI 标签和 subagent 自报都不是运行时证据。没有这类 SDK telemetry 时，`actual_model` 为 `null`，审查的 `cross_model` 与 `review_kind` 均保持 `unverified`。
+
 ### Profiles
 
 Cursor 默认 `lean`；OpenCode 和 Claude 默认 `balanced`。`lean`/`balanced` 仅改变 R0/R1 升级阈值与 L0/capsule 预算，**不会**复制两套策略正文，也不会改变 R2 的 strict 触发、`P01,P04` 加载或独立审查要求。使用 `-Profile lean|balanced`（PowerShell）或 `--profile lean|balanced`（bash）显式覆盖。

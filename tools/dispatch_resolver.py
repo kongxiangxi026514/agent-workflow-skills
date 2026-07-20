@@ -17,6 +17,10 @@ from validate_jsonc import parse_jsonc
 
 ROLES = ("build", "reason", "review")
 PLATFORMS = ("cursor", "opencode")
+CURSOR_SDK_MODEL_SOURCES = (
+    "cursor-sdk.run.model",
+    "cursor-sdk.result.model",
+)
 CURSOR_MODEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 OPENCODE_MODEL_RE = re.compile(
     r"^[A-Za-z0-9][A-Za-z0-9._-]*(/[A-Za-z0-9][A-Za-z0-9._-]*)+$"
@@ -99,7 +103,7 @@ def resolve_dispatch(
         )
     if platform == "cursor":
         native_dispatch = {
-            "subagent_type": "explore" if role == "review" else "generalPurpose",
+            "subagent_type": "generalPurpose",
             "model": requested,
         }
         native_model_source = "dispatch-argument"
@@ -118,7 +122,7 @@ def resolve_dispatch(
         ],
         "native_dispatch": native_dispatch,
         "native_model_source": native_model_source,
-        "read_only": role == "review",
+        "review_write_contract": "read-only" if role == "review" else None,
         "registry_validation": (
             "verified" if available_models is not None else "not-exposed"
         ),
@@ -129,23 +133,45 @@ def make_receipt(
     request: dict,
     *,
     actual_model: str | None = None,
-    actual_family: str | None = None,
+    actual_model_source: str | None = None,
 ) -> dict:
-    """Finalize a receipt without inferring an unobservable runtime model."""
+    """Finalize a receipt only from permitted Cursor SDK model telemetry."""
     requested = request["requested_model"]
     role = request["role"]
+    if actual_model is None:
+        if actual_model_source is not None:
+            raise DispatchResolutionError(
+                "actual_model_source requires Cursor SDK model telemetry"
+            )
+    else:
+        if request["platform"] != "cursor":
+            raise DispatchResolutionError(
+                "runtime model evidence is supported only for Cursor SDK telemetry"
+            )
+        if actual_model_source is None:
+            raise DispatchResolutionError(
+                "actual_model requires an explicit Cursor SDK telemetry source"
+            )
+        if actual_model_source not in CURSOR_SDK_MODEL_SOURCES:
+            raise DispatchResolutionError(
+                f"unsupported telemetry source: {actual_model_source}"
+            )
     if actual_model is not None and actual_model != requested:
         raise DispatchResolutionError(
             f"native runtime fallback detected: requested {requested}, got {actual_model}"
         )
-    if role != "review":
+    if actual_model is None:
+        cross_model = "unverified"
+        review_kind = (
+            "independent-review-unverified"
+            if role == "review"
+            else "not-a-review"
+        )
+    elif role != "review":
         cross_model = False
         review_kind = "not-a-review"
-    elif actual_model is None:
-        cross_model = "unverified"
-        review_kind = "independent-review-unverified"
     else:
-        observed_family = actual_family or request.get("requested_family")
+        observed_family = request.get("requested_family")
         comparison = request.get("comparison_families", [])
         if observed_family is None or len(comparison) < 2:
             cross_model = "unverified"
@@ -161,6 +187,7 @@ def make_receipt(
         "role": role,
         "requested_model": requested,
         "actual_model": actual_model,
+        "actual_model_source": actual_model_source,
         "cross_model": cross_model,
         "review_kind": review_kind,
         "registry_validation": request["registry_validation"],
@@ -175,7 +202,11 @@ def main() -> int:
     parser.add_argument("--available-model", action="append")
     parser.add_argument("--registry-exposed", action="store_true")
     parser.add_argument("--actual-model")
-    parser.add_argument("--actual-family")
+    parser.add_argument(
+        "--actual-model-source",
+        choices=CURSOR_SDK_MODEL_SOURCES,
+        help="Cursor SDK telemetry field that supplied --actual-model",
+    )
     args = parser.parse_args()
     try:
         request = resolve_dispatch(
@@ -190,7 +221,7 @@ def main() -> int:
             "receipt": make_receipt(
                 request,
                 actual_model=args.actual_model,
-                actual_family=args.actual_family,
+                actual_model_source=args.actual_model_source,
             ),
         }
         print(json.dumps(output, ensure_ascii=False, indent=2))

@@ -67,6 +67,22 @@ class PublicDocumentationTests(unittest.TestCase):
         ):
             self.assertIn(flag, readme + install)
 
+    def test_cursor_review_docs_state_dispatch_and_sdk_evidence_limits(self):
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        install = (ROOT / "INSTALL.md").read_text(encoding="utf-8")
+        routing = (ROOT / "config" / "model-routing.md").read_text(encoding="utf-8")
+        for text in (
+            "generalPurpose",
+            "explore",
+            "只读",
+            "not claim",
+            "Cursor SDK",
+            "cursor-sdk.run.model",
+            "cursor-sdk.result.model",
+            "actual_model_source",
+        ):
+            self.assertIn(text, readme + install + routing)
+
     def test_install_lists_all_generated_skills_from_canonical_source(self):
         install = (ROOT / "INSTALL.md").read_text(encoding="utf-8")
         generated = ROOT / "policy-v3" / "generated" / "skills"

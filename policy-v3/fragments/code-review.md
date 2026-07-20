@@ -11,7 +11,7 @@ Use the `review` role independently from implementation. Mark findings as blocki
 
 For security, concurrency, performance, deployment, or data-loss risk, actively test malformed, empty, oversized, repeated, and interrupted operations. A negative claim such as “unused,” “untested,” or “safe to delete” requires a full-tree or direct-file recheck before acceptance.
 
-The parent verifies blocking findings against the real diff and reruns the decisive checks. Review does not authorize editing outside the requested scope.
+The parent verifies blocking findings against the real diff and reruns the decisive checks. Review is read-only by contract: reviewers inspect and report but do not write files. This contract is not a claim of platform-enforced read-only permission; the parent retains all integration and editing authority.
 
 ## Review-feedback triage
 
