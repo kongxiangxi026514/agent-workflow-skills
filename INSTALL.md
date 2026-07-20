@@ -79,7 +79,7 @@ Cursor binding 位于 `<project>/.cursor/agent-workflow-skills/model-routing.jso
 - 脊柱正文(已剥离 `.mdc` frontmatter)幂等注入 `~/.config/opencode/AGENTS.md`(全局始终加载),用 `<!-- BEGIN agent-workflow-skills spine -->` / `<!-- END agent-workflow-skills spine -->` 标记块包裹。
 - 首次安装用 CLI 明确给 `build` 与 `review`;`reason` 省略即以 JSONC `null` 复用 build。角色配置写入 OpenCode 主配置 `agent` 映射，而不是 bundle Markdown role agent；未命名的 Markdown agent 继承会话模型。之后编辑 `<config-dir>/agent-workflow-skills/model-routing.jsonc` 并带相同 migration flag 重跑，三个角色的 JSON 字段会刷新；review 保持 `edit: deny`。
 - 默认 config dir 是字面 `~/.config/opencode`;覆盖参数同时适用于 install/uninstall。默认不改主配置并 fail-loud；`--migrate-opencode-model-config` / `-MigrateOpenCodeModelConfig` 是唯一 opt-in。`--opencode-model-config` / `-OpenCodeModelConfig` 可选择 `opencode.json` 或 `opencode.jsonc`；未指定时只能使用唯一现存文件，无文件时创建 JSONC，双文件或损坏内容均拒绝且不改写。
-- 迁移保留非模型 JSON 语义，将原字节备份到 `<config-dir>/agent-workflow-skills/migration-backups/`，并在 `opencode-model-migration.json` 记录前后 SHA-256 与 managed role fields。它会移走 `agents/{build,reason,review}.md` 脱离发现目录，并从其余 Markdown agent（例如 `github-helper`）剥离 `model:`。安装器只验证 review ID 不等于 build/effective-reason;provider 字符串不同不能证明模型家族不同。全部 UTF-8 无 BOM;先临时 staging/校验再替换目标,失败校验不改变既有 bundle 状态。完成后必须重启 OpenCode。
+- 迁移保留非模型 JSON 语义，将原字节备份到 `<config-dir>/agent-workflow-skills/migration-backups/`，并在 `opencode-model-migration.json` 记录前后 SHA-256 与 managed role fields。它只会移走 state hash 与 marker 同时证明属于旧 bundle 的 `agents/{build,reason,review}.md`；同名自定义 agent 会 fail-loud，用户必须先手动重命名或迁移。其余 Markdown agent（例如 `github-helper`）会递归剥离 `model:`。安装器只验证 review ID 不等于 build/effective-reason;provider 字符串不同不能证明模型家族不同。全部 UTF-8 无 BOM;先临时 staging/校验再替换目标,失败校验不改变既有 bundle 状态。完成后必须重启 OpenCode。
 
 ## 模型路由
 
@@ -120,7 +120,7 @@ Cursor 与 OpenCode binding 完全独立。`all` 安装必须分别提供 `Curso
 
 - 只删除 ownership state/marker 证明属于本包的 skill/agent/rule/binding;同名用户文件保留。
 - 移除 `AGENTS.md` / `CLAUDE.md` 里的脊柱标记块,保留文件其余内容。
-- 只删除 audit 证明仍由本包管理的 OpenCode `agent.build/reason/review` 字段；字段漂移时保留用户改动，且绝不恢复 Markdown `model:` 硬编码。
+- 只删除 audit 证明仍由本包管理的 OpenCode `agent.build/reason/review` 字段；字段漂移时保留用户改动，且绝不恢复 Markdown `model:` 硬编码。迁移 backup 保留在机器本地，供人工审计或回滚检查。
 - `-Project` 给定时删掉 `<repo>\.cursor\rules\workflow-gate.mdc`。
 - OpenCode 主配置不会被删除；仅在显式 migration 后由 uninstall 删除校验通过的受管角色字段。
 - 已不存在的项直接跳过,不报错。

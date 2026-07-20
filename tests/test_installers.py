@@ -1,4 +1,4 @@
-import json, os, shutil, subprocess, tempfile, unittest
+import hashlib, json, os, shutil, subprocess, tempfile, unittest
 from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SKILLS = (
@@ -51,10 +51,10 @@ class InstallerTests(unittest.TestCase):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(payload := content.encode("utf-8"))
         return path, payload
-    def invoke(self, script, tool, *extra):
+    def invoke(self, script, tool, *extra, env=None):
         return subprocess.run(
             [PS, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(ROOT / script), "-Tool", tool, *extra],
-            cwd=ROOT, env=self.env, capture_output=True, check=False,
+            cwd=ROOT, env=self.env | (env or {}), capture_output=True, check=False,
         )
     def roles(self, config):
         return json.loads(config.read_text(encoding="utf-8"))["agent"]
@@ -65,14 +65,28 @@ class InstallerTests(unittest.TestCase):
         path, before = self.config("opencode.json", '{"user":{"中文":"保留"}}\n')
         legacy = self.opencode / "agents" / "build.md"
         legacy.parent.mkdir()
-        legacy.write_text("---\nmodel: acme/legacy\n---\n", encoding="utf-8")
-        self.assertEqual(
-            self.invoke(
-                "install.ps1", "opencode", *MIGRATE,
-                "-OpenCodeModelConfig", str(path), *MODELS,
-            ).returncode,
-            0,
+        legacy.write_text(
+            "---\nmodel: acme/legacy\n---\n<!-- Managed by agent-workflow-skills. -->\n",
+            encoding="utf-8",
         )
+        state = self.opencode / "agent-workflow-skills" / "install-state.json"
+        state.parent.mkdir()
+        state.write_text(
+            json.dumps(
+                {
+                    "bundle": "agent-workflow-skills",
+                    "owned_sha256": {
+                        "agents/build.md": hashlib.sha256(legacy.read_bytes()).hexdigest()
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        result = self.invoke(
+            "install.ps1", "opencode", *MIGRATE,
+            "-OpenCodeModelConfig", str(path), *MODELS,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr.decode("utf-8", "replace"))
         self.assertEqual(self.roles(path)["build"]["model"], "acme/terra")
         self.assertFalse(legacy.exists())
         retired = self.opencode / "agent-workflow-skills/retired-agents/build.md"
@@ -109,6 +123,49 @@ class InstallerTests(unittest.TestCase):
         result = self.invoke("install.ps1", "opencode", *MIGRATE, *MODELS)
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(path.read_bytes(), before)
+
+    def test_unowned_named_role_is_preserved_and_requires_manual_rename(self):
+        config, before = self.config("opencode.jsonc", '{"user":"keep"}\n')
+        role = self.opencode / "agents" / "nested" / "build.md"
+        role.parent.mkdir(parents=True)
+        role.write_text("---\nmodel: acme/user\n---\n", encoding="utf-8")
+        role_before = role.read_bytes()
+        result = self.invoke("install.ps1", "opencode", *MIGRATE, *MODELS)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(b"rename", result.stderr.lower())
+        self.assertEqual(config.read_bytes(), before)
+        self.assertEqual(role.read_bytes(), role_before)
+        self.assertFalse((self.opencode / "skills").exists())
+        self.assertFalse((self.opencode / "AGENTS.md").exists())
+        self.assertFalse(self.binding.exists())
+
+    def test_opencode_transaction_failure_or_collision_leaves_no_partial_state(self):
+        config, before = self.config("opencode.jsonc", '{"user":"keep"}\n')
+        result = self.invoke(
+            "install.ps1", "opencode", *MIGRATE, *MODELS,
+            env={"AGENT_WORKFLOW_OPENCODE_TRANSACTION_FAIL_AFTER": "4"},
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(config.read_bytes(), before)
+        self.assertFalse((self.opencode / "skills").exists())
+        self.assertFalse((self.opencode / "AGENTS.md").exists())
+        self.assertFalse(self.binding.exists())
+        self.assertFalse(
+            (self.opencode / "agent-workflow-skills/install-state.json").exists()
+        )
+
+        self.temp.cleanup()
+        self.setUp()
+        config, before = self.config("opencode.jsonc", '{"user":"keep"}\n')
+        collision = self.opencode / "agent-workflow-skills/migration-backups"
+        collision.parent.mkdir()
+        collision.write_text("not a directory", encoding="utf-8")
+        result = self.invoke("install.ps1", "opencode", *MIGRATE, *MODELS)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(config.read_bytes(), before)
+        self.assertFalse((self.opencode / "skills").exists())
+        self.assertFalse((self.opencode / "AGENTS.md").exists())
+        self.assertFalse(self.binding.exists())
 
     def test_opencode_requires_explicit_migration_before_all_mutation(self):
         result = self.invoke("install.ps1", "all", "-Project", str(self.project), *PLATFORM_MODELS)
@@ -352,6 +409,17 @@ class JsoncValidatorTests(unittest.TestCase):
         finally:
             path.unlink()
 
+    def test_duplicate_keys_are_rejected_at_nested_levels(self):
+        with tempfile.NamedTemporaryFile("wb", delete=False) as file:
+            file.write(b'{"outer":{"duplicate":1,"duplicate":2}}\n')
+            path = Path(file.name)
+        try:
+            result = subprocess.run(["python", str(ROOT / "tools/validate_jsonc.py"), str(path)], capture_output=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn(b"duplicate", result.stderr.lower())
+        finally:
+            path.unlink()
+
 @unittest.skipUnless(BASH, "bash unavailable")
 class BashInstallerTests(unittest.TestCase):
     @classmethod
@@ -374,6 +442,8 @@ run "$repo/install.sh" --tool opencode --opencode-config-dir "$cfgdir" --migrate
 grep -q '"用户": "保留"' "$cfgdir/opencode.jsonc"; grep -q '"model": "acme/terra"' "$cfgdir/opencode.jsonc"
 test -f "$cfgdir/agent-workflow-skills/migration-backups/"*/opencode.jsonc
 cmp "$cfgdir/agent-workflow-skills/migration-backups/"*/opencode.jsonc "$root/jsonc"
+mode="$(stat -c %a "$cfgdir/opencode.jsonc")"; test $((8#$mode & 077)) -eq 0
+backup_mode="$(stat -c %a "$cfgdir/agent-workflow-skills/migration-backups/"*/opencode.jsonc)"; test $((8#$backup_mode & 077)) -eq 0
 test ! -e "$cfgdir/agents/build.md"
 binding="$cfgdir/agent-workflow-skills/model-routing.jsonc"
 printf '%s\n' '{"build":"acme/new","reason":"acme/sol","review":"other/new"}' > "$binding"
@@ -381,6 +451,21 @@ run "$repo/install.sh" --tool opencode --opencode-config-dir "$cfgdir" --migrate
 grep -q '"model": "acme/new"' "$cfgdir/opencode.jsonc"
 run "$repo/uninstall.sh" --tool opencode --opencode-config-dir "$cfgdir"
 test ! -e "$binding"; ! grep -q '"model": "acme/new"' "$cfgdir/opencode.jsonc"
+''')
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+
+    def test_bash_transaction_failure_leaves_no_partial_opencode_state(self):
+        result = self.run_bash(r'''
+set -euo pipefail
+repo="$1"; root="$(mktemp -d)"; trap 'rm -rf "$root"' EXIT; export HOME="$root/home"
+cfgdir="$root/config"; mkdir -p "$cfgdir"; printf '%s\n' '{"user":"keep"}' > "$cfgdir/opencode.jsonc"; cp "$cfgdir/opencode.jsonc" "$root/before"
+if env -i HOME="$HOME" PATH=/usr/local/bin:/usr/bin:/bin AGENT_WORKFLOW_OPENCODE_TRANSACTION_FAIL_AFTER=4 \
+  bash "$repo/install.sh" --tool opencode --opencode-config-dir "$cfgdir" --migrate-opencode-model-config \
+  --build-model acme/terra --review-model other/glm; then exit 1; fi
+cmp "$cfgdir/opencode.jsonc" "$root/before"
+test ! -e "$cfgdir/skills"; test ! -e "$cfgdir/AGENTS.md"
+test ! -e "$cfgdir/agent-workflow-skills/model-routing.jsonc"
+test ! -e "$cfgdir/agent-workflow-skills/install-state.json"
 ''')
         self.assertEqual(result.returncode, 0, result.stderr.decode())
 

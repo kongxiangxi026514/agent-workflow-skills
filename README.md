@@ -104,7 +104,7 @@ OpenCode 默认使用 `$HOME/.config/opencode`；可用 `-OpenCodeConfigDir` / `
   --build-model sample/build-v1 --review-model sample/review-v1
 ```
 
-OpenCode binding 位于 `<config-dir>/agent-workflow-skills/model-routing.jsonc`。为保护已有配置，默认安装会 fail-loud；只有带迁移 opt-in 才读取并修改一个选定的 `opencode.json` / `opencode.jsonc`。`-OpenCodeModelConfig` / `--opencode-model-config` 可显式选择其一；否则仅在恰好一个存在时自动选择，都不存在时新建 `opencode.jsonc`，两个同时存在时拒绝。迁移会在 `<config-dir>/agent-workflow-skills/migration-backups/` 逐字节备份原文件，并记录 SHA-256 audit。
+OpenCode binding 位于 `<config-dir>/agent-workflow-skills/model-routing.jsonc`。为保护已有配置，默认安装会 fail-loud；只有带迁移 opt-in 才读取并修改一个选定的 `opencode.json` / `opencode.jsonc`。`-OpenCodeModelConfig` / `--opencode-model-config` 可显式选择其一；否则仅在恰好一个存在时自动选择，都不存在时新建 `opencode.jsonc`，两个同时存在时拒绝。迁移会在 `<config-dir>/agent-workflow-skills/migration-backups/` 逐字节备份原文件，并记录 SHA-256 audit。若 `agents/` 中已有自定义的 `build.md`、`reason.md` 或 `review.md`，安装器不会移动它：请先手动重命名或迁移该 agent，再重试。
 
 ### Claude：机器级安装
 
