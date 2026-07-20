@@ -12,7 +12,7 @@ TOOLS = Path(__file__).resolve().parent
 if str(TOOLS) not in sys.path:
     sys.path.insert(0, str(TOOLS))
 
-from validate_jsonc import normalize_jsonc
+from validate_jsonc import parse_jsonc
 
 
 ROLES = ("build", "reason", "review")
@@ -40,9 +40,7 @@ def _load_binding(platform: str, binding_path: Path) -> dict:
     if platform not in PLATFORMS:
         raise DispatchResolutionError(f"unsupported dispatch platform: {platform}")
     try:
-        data = json.loads(
-            normalize_jsonc(binding_path.read_bytes().decode("utf-8-sig"))
-        )
+        data = parse_jsonc(binding_path.read_bytes().decode("utf-8-sig"))
     except (OSError, UnicodeError, ValueError, json.JSONDecodeError) as error:
         raise DispatchResolutionError(f"invalid model binding: {error}") from error
     if not isinstance(data, dict):

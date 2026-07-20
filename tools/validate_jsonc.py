@@ -1,6 +1,17 @@
 """Validate UTF-8 JSON/JSONC without rewriting its source bytes."""
 import json, sys
 from pathlib import Path
+
+
+def _no_duplicate_keys(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"duplicate object key: {key!r}")
+        result[key] = value
+    return result
+
+
 def normalize_jsonc(text):
     """Remove comments and trailing commas with a string-aware scanner."""
     result, index = [], 0
@@ -52,10 +63,17 @@ def normalize_jsonc(text):
             result.append(char)
         index += 1
     return "".join(result)
+
+
+def parse_jsonc(text):
+    """Parse JSON/JSONC while rejecting duplicate keys at every object level."""
+    return json.loads(normalize_jsonc(text), object_pairs_hook=_no_duplicate_keys)
+
+
 def main():
     try:
         if len(sys.argv) != 2: raise ValueError("usage: validate_jsonc.py PATH")
-        json.loads(normalize_jsonc(Path(sys.argv[1]).read_bytes().decode("utf-8-sig")))
+        parse_jsonc(Path(sys.argv[1]).read_bytes().decode("utf-8-sig"))
     except (OSError, UnicodeError, ValueError) as error:
         print(f"Invalid UTF-8 JSON/JSONC: {error}", file=sys.stderr)
         return 1

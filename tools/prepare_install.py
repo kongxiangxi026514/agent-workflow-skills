@@ -2,7 +2,7 @@
 import hashlib, json, re, shutil, sys
 from pathlib import Path
 
-from validate_jsonc import normalize_jsonc
+from validate_jsonc import parse_jsonc
 from render_policy import detect_drift, expected_outputs, profile_names
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -28,9 +28,9 @@ def _model(platform, role, value, nullable=False):
 def _binding(path, supplied, platform):
     supplied = tuple("" if value == "-" else value for value in supplied)
     if path.exists():
-        data = json.loads(normalize_jsonc(path.read_bytes().decode("utf-8-sig")))
+        data = parse_jsonc(path.read_bytes().decode("utf-8-sig"))
     else:
-        data = json.loads(normalize_jsonc((ROOT / "config/model-routing.jsonc").read_text(encoding="utf-8")))
+        data = parse_jsonc((ROOT / "config/model-routing.jsonc").read_text(encoding="utf-8"))
         data.update({"build": supplied[0] or None, "reason": supplied[1] or None, "review": supplied[2] or None})
     if not isinstance(data, dict):
         raise ValueError("model binding root must be an object")
