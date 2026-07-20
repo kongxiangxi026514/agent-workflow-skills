@@ -33,7 +33,9 @@
 
 `build` 负责实现、重构和常规调试；`reason` 仅用于非显然权衡或未知根因；`review` 用于独立验证。安装后的 JSONC binding 可编辑：修改本机 binding 后重跑同一安装命令，即会刷新受管产物。`reason: null` 会复用 `build`；`review` ID 必须不同于 `build` 和有效 `reason`。安装器只验证 ID 不等性，不能从 provider 字符串推断模型家族独立性。
 
-Cursor 的 `review` 会使用 binding 中的模型与原生 `generalPurpose` 派发，不使用内置 `explore`。审查员是“只读”工作流契约：只检查和报告，不写文件；本包不声称 Cursor IDE 的该派发接口会强制只读权限，父 agent 仍负责整合与改动。只有 Cursor SDK 明确提供 `run.model` 或 `result.model` 时，receipt 才能记录 `actual_model`（并以 `cursor-sdk.run.model` 或 `cursor-sdk.result.model` 标明 `actual_model_source`）；CLI 参数、UI 标签和 subagent 自报都不是运行时证据。没有这类 SDK telemetry 时，`actual_model` 为 `null`，审查的 `cross_model` 与 `review_kind` 均保持 `unverified`。
+Cursor 的 `review` 会使用 binding 中的模型与原生 `generalPurpose` 派发，不使用内置 `explore`。审查员是“只读”工作流契约：只检查和报告，不写文件；本包不声称 Cursor IDE 的该派发接口会强制只读权限，父 agent 仍负责整合与改动。当前不随包提供 SDK telemetry adapter，因为官方 SDK telemetry 字段支持尚未建立；因此已安装 resolver 不接收实际模型或来源输入，始终输出 `actual_model: null`、`actual_model_source: null`、`cross_model: "unverified"`，审查的 `review_kind` 也是 `"independent-review-unverified"`。
+
+未来 adapter 必须在受控运行时中解析 genuine SDK run/result object，not CLI 输入。未实现前，CLI 值、UI 标签、subagent 自报及通用 library caller 都不能产生运行时模型或 cross-model 断言。
 
 ### Profiles
 

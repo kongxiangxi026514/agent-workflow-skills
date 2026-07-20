@@ -18,7 +18,9 @@ Portable policy defines roles only; each installation keeps concrete IDs in its 
 
 Cursor review dispatch uses the binding-selected model with native `generalPurpose`; it never routes review through built-in `explore`. A reviewer is read-only by workflow contract and must not write files, but this bundle does not claim that the native Cursor dispatch API enforces read-only permissions. The parent supplies that contract in the review capsule and remains the only integration authority.
 
-An `actual_model` receipt is valid only when Cursor SDK telemetry explicitly identifies `run.model` or `result.model`. Record the corresponding `actual_model_source` as `cursor-sdk.run.model` or `cursor-sdk.result.model`; do not accept CLI `--actual-model`, UI labels, or a subagent's self-report as runtime evidence. Without one of those SDK sources, retain `actual_model: null`, `cross_model: "unverified"`, and `review_kind: "independent-review-unverified"` for a review. Binding family labels may classify a telemetry-verified requested model, but never manufacture runtime-model evidence.
+No current SDK adapter is shipped because official SDK telemetry field support is not established. The installed resolver has no actual-model or source input path and always emits `actual_model: null`, `actual_model_source: null`, `cross_model: "unverified"`, and `review_kind: "independent-review-unverified"` for review. Binding family labels cannot manufacture runtime-model evidence or a cross-model result.
+
+A future adapter must parse a genuine SDK run/result object in a controlled runtime, not CLI input. Until that adapter exists, CLI values, UI labels, self-reports, and generic library callers must not create runtime-model or cross-model claims.
 
 ## Cost strategy
 

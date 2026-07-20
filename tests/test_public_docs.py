@@ -76,12 +76,14 @@ class PublicDocumentationTests(unittest.TestCase):
             "explore",
             "只读",
             "not claim",
-            "Cursor SDK",
-            "cursor-sdk.run.model",
-            "cursor-sdk.result.model",
-            "actual_model_source",
+            "No current SDK adapter is shipped",
+            "controlled runtime",
+            "genuine SDK run/result object",
+            "not CLI",
         ):
             self.assertIn(text, readme + install + routing)
+        self.assertNotIn("--actual-model", readme + install + routing)
+        self.assertNotIn("cursor-sdk.run.model", readme + install + routing)
 
     def test_install_lists_all_generated_skills_from_canonical_source(self):
         install = (ROOT / "INSTALL.md").read_text(encoding="utf-8")

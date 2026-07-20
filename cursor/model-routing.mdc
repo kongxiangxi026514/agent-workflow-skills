@@ -15,5 +15,7 @@ Before every native subagent dispatch, run the installed `dispatch_resolver.py` 
 
 Review has a read-only contract: it inspects and reports without writing files. The native Cursor dispatch arguments used by this bundle provide no platform-enforced read-only permission, so the review capsule must state the contract and the parent keeps editing authority.
 
-Record `role`, `requested_model`, `actual_model`, `actual_model_source`, and `cross_model`. Only Cursor SDK `run.model` or `result.model` telemetry may populate `actual_model`, with source values `cursor-sdk.run.model` or `cursor-sdk.result.model`. A CLI value, UI label, or subagent self-report is not runtime evidence. Without SDK telemetry, use `actual_model=null`, `cross_model=unverified`, and `review_kind=independent-review-unverified`. Same-family review is independent-context review.
+Record `role`, `requested_model`, `actual_model`, `actual_model_source`, and `cross_model`. No current SDK adapter is shipped because official SDK telemetry field support is not established. The installed resolver accepts no actual-model or source argument and always emits `actual_model=null`, `actual_model_source=null`, `cross_model=unverified`, and `review_kind=independent-review-unverified` for review; family labels cannot change that result.
+
+A future adapter must parse a genuine SDK run/result object in a controlled runtime, not CLI input. Until then, CLI values, UI labels, self-reports, and generic library callers must not create runtime-model or cross-model claims.
 <!-- Managed by agent-workflow-skills. -->
