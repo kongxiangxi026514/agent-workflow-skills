@@ -130,7 +130,7 @@ class OpenCodeModelMigrationTests(unittest.TestCase):
         self.assertEqual(migrated["agent"]["review"]["permission"], {"edit": "deny"})
         self.assertNotIn("model:", helper.read_text(encoding="utf-8"))
         self.assertFalse((agents / "build.md").exists())
-        retired = self.base / "agent-workflow-skills" / "retired-agents" / "build.md"
+        retired = self.base / "agent-workflow-skills" / "retired-agents" / "agents" / "build.md"
         self.assertIn("description: legacy", retired.read_text(encoding="utf-8"))
         self.assertNotIn("model:", retired.read_text(encoding="utf-8"))
 
@@ -339,6 +339,34 @@ class OpenCodeModelMigrationTests(unittest.TestCase):
         self.assertIn(b"reparse", result.stderr.lower())
         self.assertEqual(config.read_bytes(), before)
         self.assertFalse(self.audit.exists())
+
+    def test_duplicate_agent_names_across_roots_fail_before_mutation(self):
+        config = self.base / "opencode.jsonc"
+        before = b'{"user":"keep"}\n'
+        config.write_bytes(before)
+        for root in ("agent", "agents"):
+            helper = self.base / root / "nested" / "github-helper.md"
+            helper.parent.mkdir(parents=True)
+            helper.write_text("---\nmodel: sample/helper\n---\n", encoding="utf-8")
+        result = self.invoke()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(b"duplicate", result.stderr.lower())
+        self.assertEqual(config.read_bytes(), before)
+        self.assertTrue((self.base / "agent" / "nested" / "github-helper.md").is_file())
+        self.assertTrue((self.base / "agents" / "nested" / "github-helper.md").is_file())
+
+    def test_unowned_named_role_in_singular_root_fails_before_mutation(self):
+        config = self.base / "opencode.jsonc"
+        before = b'{"user":"keep"}\n'
+        config.write_bytes(before)
+        role = self.base / "agent" / "build.md"
+        role.parent.mkdir()
+        role.write_text("---\nmodel: sample/user\n---\n", encoding="utf-8")
+        result = self.invoke()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(b"rename", result.stderr.lower())
+        self.assertEqual(config.read_bytes(), before)
+        self.assertTrue(role.is_file())
 
     def test_quoted_model_keys_are_removed_and_complex_model_yaml_is_rejected(self):
         config = self.base / "opencode.jsonc"

@@ -92,7 +92,7 @@ class InstallerTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr.decode("utf-8", "replace"))
         self.assertEqual(self.roles(path)["build"]["model"], "acme/terra")
         self.assertFalse(legacy.exists())
-        retired = self.opencode / "agent-workflow-skills/retired-agents/build.md"
+        retired = self.opencode / "agent-workflow-skills/retired-agents/agents/build.md"
         self.assertNotIn("model:", retired.read_text(encoding="utf-8"))
         audit = json.loads((self.opencode / "agent-workflow-skills/opencode-model-migration.json").read_text(encoding="utf-8"))
         entry = next(item for item in audit["files"] if item["path"] == "opencode.json")
@@ -109,6 +109,31 @@ class InstallerTests(unittest.TestCase):
         self.assertEqual(self.roles(path)["reason"]["model"], "acme/sol")
         self.assertNotIn("model:", helper.read_text(encoding="utf-8"))
         self.assertFalse((self.opencode / "opencode.json").exists())
+
+    def test_singular_agent_root_is_sanitized_and_audited(self):
+        config, _ = self.config("opencode.jsonc", '{"user":"keep"}\n')
+        helper = self.opencode / "agent" / "nested" / "github-helper.md"
+        helper.parent.mkdir(parents=True)
+        original = "---\nmodel: huawei/glm5.2\n---\n"
+        helper.write_text(original, encoding="utf-8")
+        result = self.invoke(
+            "install.ps1",
+            "opencode",
+            *MIGRATE,
+            "-BuildModel",
+            "huawei/glm5.2",
+            "-ReviewModel",
+            "other/glm",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr.decode("utf-8", "replace"))
+        self.assertEqual(self.roles(config)["build"]["model"], "huawei/glm5.2")
+        self.assertNotIn("model:", helper.read_text(encoding="utf-8"))
+        audit = json.loads(
+            (self.opencode / "agent-workflow-skills/opencode-model-migration.json").read_text(encoding="utf-8")
+        )
+        entry = next(item for item in audit["files"] if item["path"] == "agent/nested/github-helper.md")
+        backup = self.opencode / "agent-workflow-skills" / entry["backup"]
+        self.assertEqual(backup.read_text(encoding="utf-8"), original)
 
     def test_both_configs_fail_before_any_mutation(self):
         json_path, json_before = self.config("opencode.json", "{}\n")
@@ -652,9 +677,10 @@ class InstallerTests(unittest.TestCase):
         self.assertNotRegex(cursor_rule, r"(?m)^model\s*:")
         self.assertNotIn("gpt-5.6", cursor_rule)
         self.assertNotIn("glm-5.2", cursor_rule)
-        agents = ROOT / "opencode/agents"
-        for path in agents.glob("*.md") if agents.exists() else ():
-            self.assertNotRegex(path.read_text(encoding="utf-8"), r"(?m)^model\s*:")
+        for root_name in ("agent", "agents"):
+            agents = ROOT / "opencode" / root_name
+            for path in agents.rglob("*.md") if agents.exists() else ():
+                self.assertNotRegex(path.read_text(encoding="utf-8"), r"(?m)^model\s*:")
 
 class JsoncValidatorTests(unittest.TestCase):
     def test_block_comment_between_tokens_does_not_merge_values(self):
@@ -709,6 +735,21 @@ run "$repo/install.sh" --tool opencode --opencode-config-dir "$cfgdir" --migrate
 grep -q '"model": "acme/new"' "$cfgdir/opencode.jsonc"
 run "$repo/uninstall.sh" --tool opencode --opencode-config-dir "$cfgdir"
 test ! -e "$binding"; ! grep -q '"model": "acme/new"' "$cfgdir/opencode.jsonc"
+''')
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+
+    def test_bash_singular_agent_root_is_sanitized_and_audited(self):
+        result = self.run_bash(r'''
+set -euo pipefail
+repo="$1"; root="$(mktemp -d)"; trap 'rm -rf "$root"' EXIT; export HOME="$root/home"
+cfg="$root/opencode"; mkdir -p "$cfg/agent/nested"; printf '%s\n' '{"user":"keep"}' > "$cfg/opencode.jsonc"
+printf '%s\n' '---' 'model: huawei/glm5.2' '---' > "$cfg/agent/nested/github-helper.md"
+run() { env -i HOME="$HOME" PATH=/usr/local/bin:/usr/bin:/bin bash "$@"; }
+run "$repo/install.sh" --tool opencode --opencode-config-dir "$cfg" --migrate-opencode-model-config --build-model huawei/glm5.2 --review-model other/glm
+! grep -q '^model:' "$cfg/agent/nested/github-helper.md"
+grep -q '"model": "huawei/glm5.2"' "$cfg/opencode.jsonc"
+test -f "$cfg/agent-workflow-skills/migration-backups/"*/agent/nested/github-helper.md
+grep -q 'model: huawei/glm5.2' "$cfg/agent-workflow-skills/migration-backups/"*/agent/nested/github-helper.md
 ''')
         self.assertEqual(result.returncode, 0, result.stderr.decode())
 
