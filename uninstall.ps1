@@ -144,7 +144,6 @@ function Uninstall-OpenCode {
         foreach ($name in @('model-routing.jsonc', 'dispatch_resolver.py', 'validate_jsonc.py', 'opencode-model-migration.json')) {
             Remove-Item -Force (Join-Path $base "agent-workflow-skills\$name") -ErrorAction SilentlyContinue
         }
-        Remove-Item -Recurse -Force (Join-Path $base 'agent-workflow-skills\migration-backups') -ErrorAction SilentlyContinue
         Remove-Item -Force $state
     }
     $summary.Add("opencode: removed only verified managed JSON role fields; no Markdown role agents were restored")

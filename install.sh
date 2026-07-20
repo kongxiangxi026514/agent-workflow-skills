@@ -205,7 +205,8 @@ set_spine_block() {
 preflight_opencode_model_migration() {
   binding="$1"; python_cmd="$(resolve_python)"
   migration=(--config-dir "$OPENCODE_BASE" --binding "$binding" \
-    --audit "$OPENCODE_BASE/agent-workflow-skills/opencode-model-migration.json" --check)
+    --audit "$OPENCODE_BASE/agent-workflow-skills/opencode-model-migration.json" \
+    --stage "$OPENCODE_STAGE" --check)
   [ -z "$OPENCODE_MODEL_CONFIG" ] || migration+=(--opencode-model-config "$OPENCODE_MODEL_CONFIG")
   "$python_cmd" "$REPO_ROOT/tools/migrate_opencode_models.py" "${migration[@]}" ||
     { echo "OpenCode model config migration preflight failed. Nothing was installed." >&2; return 1; }
@@ -229,20 +230,16 @@ install_cursor() {
 
 install_opencode() {
   base="$OPENCODE_BASE"
-  copy_skills "$base/skills" "$OPENCODE_STAGE/skills"
-  SUMMARY+=("opencode: skills -> $base/skills")
-  set_spine_block "$base/AGENTS.md" "$OPENCODE_STAGE/workflow-gate.mdc"
-  SUMMARY+=("opencode: spine injected -> $base/AGENTS.md (marker block)")
-  mkdir -p "$base/agent-workflow-skills"
-  cp -f "$OPENCODE_STAGE/model-routing.jsonc" "$OPENCODE_STAGE/dispatch_resolver.py" \
-    "$OPENCODE_STAGE/validate_jsonc.py" "$OPENCODE_STAGE/install-state.json" "$base/agent-workflow-skills/"
-  SUMMARY+=("opencode: model binding -> $base/agent-workflow-skills/model-routing.jsonc")
   python_cmd="$(resolve_python)"
-  migration=(--config-dir "$base" --binding "$base/agent-workflow-skills/model-routing.jsonc" \
-    --audit "$base/agent-workflow-skills/opencode-model-migration.json")
+  migration=(--config-dir "$base" --binding "$OPENCODE_STAGE/model-routing.jsonc" \
+    --audit "$base/agent-workflow-skills/opencode-model-migration.json" \
+    --stage "$OPENCODE_STAGE")
   [ -z "$OPENCODE_MODEL_CONFIG" ] || migration+=(--opencode-model-config "$OPENCODE_MODEL_CONFIG")
   "$python_cmd" "$REPO_ROOT/tools/migrate_opencode_models.py" "${migration[@]}" ||
-    { echo "OpenCode model config migration failed; its config changes were rolled back." >&2; return 1; }
+    { echo "OpenCode installation transaction failed; OpenCode config changes were rolled back." >&2; return 1; }
+  SUMMARY+=("opencode: skills -> $base/skills")
+  SUMMARY+=("opencode: spine injected -> $base/AGENTS.md (marker block)")
+  SUMMARY+=("opencode: model binding -> $base/agent-workflow-skills/model-routing.jsonc")
   SUMMARY+=("opencode: role models -> selected JSON/JSONC config (audited migration)")
 }
 

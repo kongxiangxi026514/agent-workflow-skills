@@ -213,6 +213,7 @@ function Test-OpenCodeModelMigration([string]$Binding) {
         '--config-dir', $OpenCodeBase,
         '--binding', $Binding,
         '--audit', (Join-Path $OpenCodeBase 'agent-workflow-skills\opencode-model-migration.json'),
+        '--stage', $script:OpenCodeStage,
         '--check'
     )
     if ($OpenCodeModelConfig) { $migration += @('--opencode-model-config', $OpenCodeModelConfig) }
@@ -239,24 +240,20 @@ function Install-Cursor {
 
 function Install-OpenCode {
     $base = $OpenCodeBase
-    $skillsDir = Join-Path $base 'skills'
-    Copy-Skills $skillsDir (Join-Path $script:OpenCodeStage 'skills')
-    $summary.Add("opencode: skills -> $skillsDir")
-    $agents = Join-Path $base 'AGENTS.md'
-    Set-SpineBlock $agents (Join-Path $script:OpenCodeStage 'workflow-gate.mdc')
-    $summary.Add("opencode: spine injected -> $agents (marker block)")
-    Set-BundleState (Join-Path $base 'agent-workflow-skills') $script:OpenCodeStage
-    $summary.Add("opencode: model binding -> $base\agent-workflow-skills\model-routing.jsonc")
     $python = Resolve-Python
     $migration = @(
         (Join-Path $RepoRoot 'tools\migrate_opencode_models.py'),
         '--config-dir', $base,
-        '--binding', (Join-Path $base 'agent-workflow-skills\model-routing.jsonc'),
-        '--audit', (Join-Path $base 'agent-workflow-skills\opencode-model-migration.json')
+        '--binding', (Join-Path $script:OpenCodeStage 'model-routing.jsonc'),
+        '--audit', (Join-Path $base 'agent-workflow-skills\opencode-model-migration.json'),
+        '--stage', $script:OpenCodeStage
     )
     if ($OpenCodeModelConfig) { $migration += @('--opencode-model-config', $OpenCodeModelConfig) }
     & $python @migration | Out-Null
-    if ($LASTEXITCODE -ne 0) { throw 'OpenCode model config migration failed; its config changes were rolled back.' }
+    if ($LASTEXITCODE -ne 0) { throw 'OpenCode installation transaction failed; OpenCode config changes were rolled back.' }
+    $summary.Add("opencode: skills -> $(Join-Path $base 'skills')")
+    $summary.Add("opencode: spine injected -> $(Join-Path $base 'AGENTS.md') (marker block)")
+    $summary.Add("opencode: model binding -> $base\agent-workflow-skills\model-routing.jsonc")
     $summary.Add("opencode: role models -> selected JSON/JSONC config (audited migration)")
 }
 

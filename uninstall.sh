@@ -114,7 +114,6 @@ uninstall_opencode() {
       "$base/agent-workflow-skills/dispatch_resolver.py" \
       "$base/agent-workflow-skills/validate_jsonc.py" \
       "$base/agent-workflow-skills/opencode-model-migration.json" "$state"
-    rm -rf "$base/agent-workflow-skills/migration-backups"
   fi
   SUMMARY+=("opencode: removed only verified managed JSON role fields; no Markdown role agents were restored")
 }
