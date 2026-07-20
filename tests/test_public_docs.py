@@ -50,7 +50,8 @@ class PublicDocumentationTests(unittest.TestCase):
         self.assertIn(".cursor\\agent-workflow-skills\\model-routing.jsonc", readme)
         for flag in ("-Tool", "-Project", "-Profile", "-OpenCodeConfigDir"):
             self.assertIn(flag, install)
-            self.assertIn(f"${flag[1:]}", install_ps1)
+        for parameter in ("$Tool", "$Project", "$InstallProfile", "$OpenCodeConfigDir"):
+            self.assertIn(parameter, install_ps1)
         for flag in ("--tool", "--project", "--profile", "--opencode-config-dir"):
             self.assertIn(flag, install)
             self.assertIn(flag, install_sh)

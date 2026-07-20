@@ -22,7 +22,7 @@ param(
     [string]$OpenCodeConfigDir,
     [string]$OpenCodeModelConfig,
     [switch]$MigrateOpenCodeModelConfig,
-    [ValidateSet('lean', 'balanced')][string]$Profile,
+    [Alias('Profile')][ValidateSet('lean', 'balanced')][string]$InstallProfile,
     [string]$BuildModel,
     [string]$ReasonModel,
     [string]$ReviewModel,
@@ -94,7 +94,7 @@ function Resolve-Python {
 }
 
 function Get-Profile([string]$Platform) {
-    if ($Profile) { return $Profile }
+    if ($InstallProfile) { return $InstallProfile }
     if ($Platform -eq 'cursor') { return 'lean' }
     return 'balanced'
 }
@@ -116,9 +116,9 @@ function New-InstallStage([string]$Binding, [string]$Platform, [string]$InstallP
 function Test-PolicyArtifactOwnership([string]$State, [string]$Adapter, [string]$Skills, [bool]$Spine) {
     if (-not (Test-Path -LiteralPath $State)) { return }
     $python = Resolve-Python
-    $args = @((Join-Path $RepoRoot 'tools\verify_install_state.py'), '--state', $State, '--adapter', $Adapter, '--skills', $Skills)
-    if ($Spine) { $args += '--spine' }
-    & $python @args | Out-Null
+    $verifyArgs = @((Join-Path $RepoRoot 'tools\verify_install_state.py'), '--state', $State, '--adapter', $Adapter, '--skills', $Skills)
+    if ($Spine) { $verifyArgs += '--spine' }
+    & $python @verifyArgs | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "Generated policy drift detected. Nothing was installed." }
 }
 
