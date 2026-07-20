@@ -114,14 +114,13 @@ def main():
     try:
         if len(sys.argv) != 8:
             raise ValueError("usage: prepare_install.py STAGE BINDING PLATFORM PROFILE BUILD REASON REVIEW")
-        models = _stage(
+        _stage(
             Path(sys.argv[1]),
             Path(sys.argv[2]),
             sys.argv[3],
             sys.argv[4],
             tuple(sys.argv[5:8]),
         )
-        print("\n".join(models))
     except (OSError, UnicodeError, ValueError, json.JSONDecodeError) as error:
         print(f"Invalid model binding or bundle artifact: {error}", file=sys.stderr)
         return 1

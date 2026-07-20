@@ -37,7 +37,10 @@ ROLE_FIELDS = {
     },
 }
 ROLE_NAMES = tuple(ROLE_FIELDS)
-MODEL_LINE = re.compile(r"^model\s*:", re.IGNORECASE)
+YAML_KEY = re.compile(
+    r"""^(?P<indent> *)(?P<key>[A-Za-z_][A-Za-z0-9_.-]*|"[^"\\]*(?:\\.[^"\\]*)*"|'[^'\\]*(?:\\.[^'\\]*)*')\s*:(?P<value>.*)$"""
+)
+MODEL_KEY = re.compile(r"""^(?:model|"model"|'model')$""")
 AUDIT_VERSION = 1
 BUNDLE = "agent-workflow-skills"
 MANAGED_MARKER = "<!-- Managed by agent-workflow-skills. -->"
@@ -54,6 +57,107 @@ class Change:
     before: bytes | None
     after: bytes | None
     mode: int | None = None
+
+
+def _identity(path: Path):
+    try:
+        metadata = os.lstat(path)
+    except FileNotFoundError:
+        return None
+    file_type = stat.S_IFMT(metadata.st_mode)
+    return (
+        metadata.st_dev,
+        metadata.st_ino,
+        file_type,
+        None if stat.S_ISDIR(metadata.st_mode) else metadata.st_size,
+        None if stat.S_ISDIR(metadata.st_mode) else metadata.st_mtime_ns,
+        getattr(metadata, "st_file_attributes", 0),
+    )
+
+
+class MutationGuard:
+    """Detect cooperative-path swaps before and after each target mutation."""
+
+    def __init__(self, base: Path, changes: list[Change]):
+        self.base = base
+        self.expected = {}
+        for change in changes:
+            self._record_chain(change.path)
+
+    def _chain(self, path: Path):
+        current = path
+        while True:
+            yield current
+            if current == self.base:
+                return
+            current = current.parent
+
+    def _record_chain(self, path: Path) -> None:
+        for current in self._chain(path):
+            self.expected[str(current)] = _identity(current)
+
+    def assert_stable(self, path: Path) -> None:
+        _assert_safe_path(self.base, path)
+        for current in self._chain(path):
+            expected = self.expected.get(str(current))
+            actual = _identity(current)
+            if expected != actual:
+                raise MigrationError(f"path identity changed during migration: {current}")
+
+    def prepare_parent(self, path: Path) -> None:
+        self.assert_stable(path)
+        _ensure_dir(path.parent)
+        self._record_chain(path.parent)
+
+    def verify_written(self, path: Path, content: bytes) -> None:
+        self.assert_stable(path.parent)
+        _assert_safe_path(self.base, path)
+        if _identity(path) is None or path.read_bytes() != content:
+            raise MigrationError(f"path changed after write: {path}")
+        self._record_chain(path)
+
+    def verify_deleted(self, path: Path) -> None:
+        self.assert_stable(path.parent)
+        _assert_safe_path(self.base, path)
+        if _identity(path) is not None:
+            raise MigrationError(f"path changed after deletion: {path}")
+        self._record_chain(path)
+
+
+class MigrationLock:
+    """Best-effort cooperative lock; not a hostile same-user security boundary."""
+
+    def __init__(self, base: Path, state_dir: Path):
+        self.base = base
+        self.state_dir = state_dir
+        self.path = _assert_safe_path(base, state_dir / ".opencode-model-migration.lock")
+        self.descriptor = None
+        self.identity = None
+        self.state_preexisting = state_dir.exists()
+
+    def __enter__(self):
+        _ensure_dir(self.state_dir)
+        _assert_safe_path(self.base, self.path)
+        try:
+            self.descriptor = os.open(
+                self.path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600
+            )
+            os.write(self.descriptor, str(os.getpid()).encode("ascii"))
+            os.fsync(self.descriptor)
+            self.identity = _identity(self.path)
+        except FileExistsError as error:
+            raise MigrationError(
+                f"OpenCode model migration lock is already held: {self.path}"
+            ) from error
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        if self.descriptor is not None:
+            os.close(self.descriptor)
+        if self.identity is not None and _identity(self.path) == self.identity:
+            self.path.unlink(missing_ok=True)
+        if not self.state_preexisting:
+            _remove_empty_parents(self.state_dir, self.base)
 
 
 def _sha256(content: bytes) -> str:
@@ -222,17 +326,28 @@ def _config_after_migration(data: dict, models: dict[str, str]) -> tuple[dict, d
     roles = result.setdefault("agent", {})
     if not isinstance(roles, dict):
         raise MigrationError("OpenCode agent configuration must be an object")
-    managed = {}
+    managed_hashes = {}
     for role in ROLE_NAMES:
+        existing = role in roles
         current = roles.get(role, {})
         if not isinstance(current, dict):
             raise MigrationError(f"OpenCode agent.{role} must be an object")
-        expected = {**ROLE_FIELDS[role], "model": models[role]}
-        updated = dict(current)
-        updated.update(copy.deepcopy(expected))
+        if existing:
+            updated = copy.deepcopy(current)
+            if role == "review" and "permission" in updated:
+                permission = updated["permission"]
+                if not isinstance(permission, dict) or (
+                    "edit" in permission and permission["edit"] != "deny"
+                ):
+                    raise MigrationError(
+                        "OpenCode agent.review permission.edit must be deny when present"
+                    )
+            updated["model"] = models[role]
+        else:
+            updated = {**copy.deepcopy(ROLE_FIELDS[role]), "model": models[role]}
         roles[role] = updated
-        managed[role] = expected
-    return result, managed
+        managed_hashes[role] = _sha256(models[role].encode("utf-8"))
+    return result, managed_hashes
 
 
 def _strip_model_frontmatter(text: str) -> str:
@@ -244,25 +359,64 @@ def _strip_model_frontmatter(text: str) -> str:
     end = next((index for index, line in enumerate(lines[1:], 1) if line.strip() == "---"), None)
     if end is None:
         raise MigrationError("Markdown agent has unterminated frontmatter")
-    frontmatter = [
-        line for line in lines[1:end] if not MODEL_LINE.match(line.lstrip())
-    ]
+    frontmatter = []
+    for index, line in enumerate(lines[1:end], 1):
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            frontmatter.append(line)
+            continue
+        if (
+            stripped.startswith(("?", "-", "{", "["))
+            or re.search(r"(^|\s)<<\s*:", stripped)
+            or re.search(r"(^|\s)[&*][A-Za-z_]", stripped)
+        ):
+            raise MigrationError(
+                "unsupported YAML aliases, merges, sequences, or complex keys in agent frontmatter"
+            )
+        match = YAML_KEY.match(line.rstrip("\r\n"))
+        if match is None:
+            if "model" in stripped.lower():
+                raise MigrationError(
+                    "unsupported YAML key syntax where a model key cannot be proven absent"
+                )
+            frontmatter.append(line)
+            continue
+        key = match["key"]
+        if key[:1] in {"'", '"'} and "\\" in key:
+            raise MigrationError(
+                "unsupported escaped YAML key syntax where a model key cannot be proven absent"
+            )
+        value = match["value"].strip()
+        if not MODEL_KEY.fullmatch(key):
+            frontmatter.append(line)
+            continue
+        if value.startswith(("|", ">", "{", "[", "&", "*", "!")):
+            raise MigrationError("unsupported complex YAML model value")
+        next_line = lines[index + 1] if index + 1 < end else ""
+        if not value and next_line and len(next_line) - len(next_line.lstrip(" ")) > len(match["indent"]):
+            raise MigrationError("unsupported multiline YAML model value")
     return "".join([lines[0], *frontmatter, lines[end], *lines[end + 1 :]])
 
 
-def _legacy_owned_roles(base: Path, state_dir: Path) -> dict[str, str]:
+def _owned_manifest(base: Path, state_dir: Path) -> dict[str, str] | None:
     state_path = _assert_safe_path(base, state_dir / "install-state.json")
     if not state_path.exists():
-        return {}
+        return None
     try:
         state = parse_jsonc(state_path.read_bytes().decode("utf-8-sig"))
     except (OSError, UnicodeError, ValueError, json.JSONDecodeError) as error:
         raise MigrationError(f"invalid legacy install state: {error}") from error
-    if not isinstance(state, dict) or state.get("bundle") != BUNDLE:
-        return {}
+    if (
+        not isinstance(state, dict)
+        or state.get("bundle") != BUNDLE
+        or not isinstance(state.get("version"), int)
+        or state.get("platform") != "opencode"
+        or not isinstance(state.get("profile"), str)
+    ):
+        return None
     owned = state.get("owned_sha256", {})
     if not isinstance(owned, dict):
-        return {}
+        return None
     return {
         key: value
         for key, value in owned.items()
@@ -286,7 +440,7 @@ def _markdown_changes(base: Path, state_dir: Path) -> list[Change]:
         return []
     if not agents.is_dir():
         raise MigrationError(f"OpenCode agents path is not a directory: {agents}")
-    owned = _legacy_owned_roles(base, state_dir)
+    owned = _owned_manifest(base, state_dir) or {}
     changes = []
     for path in _walk_agents(base, agents):
         if not path.is_file():
@@ -329,8 +483,16 @@ def _markdown_changes(base: Path, state_dir: Path) -> list[Change]:
     return changes
 
 
-def _write_atomic(path: Path, content: bytes, mode: int | None = None) -> None:
-    _ensure_dir(path.parent)
+def _write_atomic(
+    path: Path,
+    content: bytes,
+    mode: int | None = None,
+    guard: MutationGuard | None = None,
+) -> None:
+    if guard is not None:
+        guard.prepare_parent(path)
+    else:
+        _ensure_dir(path.parent)
     temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
     descriptor = None
     try:
@@ -345,17 +507,23 @@ def _write_atomic(path: Path, content: bytes, mode: int | None = None) -> None:
         os.close(descriptor)
         descriptor = None
         os.replace(temporary, path)
+        if guard is not None:
+            guard.verify_written(path, content)
     finally:
         if descriptor is not None:
             os.close(descriptor)
         temporary.unlink(missing_ok=True)
 
 
-def _restore_change(change: Change) -> None:
+def _restore_change(change: Change, guard: MutationGuard | None = None) -> None:
     if change.before is None:
+        if guard is not None:
+            guard.assert_stable(change.path)
         change.path.unlink(missing_ok=True)
+        if guard is not None:
+            guard.verify_deleted(change.path)
     else:
-        _write_atomic(change.path, change.before, change.mode)
+        _write_atomic(change.path, change.before, change.mode, guard)
 
 
 def _remove_empty_parents(path: Path, base: Path) -> None:
@@ -375,18 +543,21 @@ def _apply_transaction(
     base: Path,
 ) -> None:
     applied: list[Change] = []
+    guard = MutationGuard(base, changes)
     try:
         for change in changes:
             if change.after is None:
+                guard.assert_stable(change.path)
                 change.path.unlink(missing_ok=True)
+                guard.verify_deleted(change.path)
             else:
-                _write_atomic(change.path, change.after, change.mode)
+                _write_atomic(change.path, change.after, change.mode, guard)
             applied.append(change)
             if fail_after_write is not None and len(applied) >= fail_after_write:
                 raise OSError("failure injection requested")
-    except OSError:
+    except (OSError, MigrationError):
         for change in reversed(applied):
-            _restore_change(change)
+            _restore_change(change, guard)
         for change in reversed(applied):
             _remove_empty_parents(change.path.parent, base)
         raise
@@ -396,8 +567,10 @@ def _audit_payload(
     base: Path,
     selected: Path,
     changes: list[Change],
-    managed: dict,
+    managed_hashes: dict,
     backup_root: Path,
+    binding: Path,
+    config_after: bytes,
 ) -> dict:
     files = []
     for change in changes:
@@ -419,7 +592,9 @@ def _audit_payload(
         "bundle": BUNDLE,
         "version": AUDIT_VERSION,
         "config": selected.relative_to(base).as_posix(),
-        "managed_roles": managed,
+        "managed_model_sha256": managed_hashes,
+        "binding_sha256": _sha256(binding.read_bytes()),
+        "config_sha256": _sha256(config_after),
         "files": files,
     }
 
@@ -471,7 +646,7 @@ def build_migration_plan(
     _assert_tree_no_reparse(base, selected.parent)
     data = _read_jsonc_object(selected)
     models = _models(binding)
-    updated, managed = _config_after_migration(data, models)
+    updated, managed_hashes = _config_after_migration(data, models)
     config_before = selected.read_bytes() if selected.exists() else None
     config_after = (json.dumps(updated, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
     changes = [Change(selected, config_before, config_after, _file_mode(selected))]
@@ -480,7 +655,15 @@ def build_migration_plan(
         base, state_dir / "migration-backups" / _backup_id(backup_id)
     )
     _preflight_migration_targets(base, state_dir, audit, backup_root)
-    payload = _audit_payload(base, selected, changes, managed, backup_root)
+    payload = _audit_payload(
+        base,
+        selected,
+        changes,
+        managed_hashes,
+        backup_root,
+        binding,
+        config_after,
+    )
     audit_after = (json.dumps(payload, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
     existing_audit = audit.read_bytes() if audit.exists() else None
     audit_mode = _file_mode(audit)
@@ -513,19 +696,23 @@ def migrate(
     check: bool = False,
     backup_id: str | None = None,
 ) -> None:
-    plan = build_migration_plan(base, binding, audit, explicit, backup_id)
     if check:
+        build_migration_plan(base, binding, audit, explicit, backup_id)
         return
-    try:
-        _apply_transaction(
-            list(plan.changes),
-            fail_after_write=fail_after_write,
-            base=plan.base,
-        )
-    except OSError as error:
-        shutil.rmtree(plan.backup_root, ignore_errors=True)
-        _remove_empty_parents(plan.backup_root.parent, plan.state_dir)
-        raise MigrationError(f"migration rolled back: {error}") from error
+    absolute_base = _absolute(base)
+    state_dir = _assert_safe_path(absolute_base, Path(audit).parent)
+    with MigrationLock(absolute_base, state_dir):
+        plan = build_migration_plan(absolute_base, binding, audit, explicit, backup_id)
+        try:
+            _apply_transaction(
+                list(plan.changes),
+                fail_after_write=fail_after_write,
+                base=plan.base,
+            )
+        except (OSError, MigrationError) as error:
+            shutil.rmtree(plan.backup_root, ignore_errors=True)
+            _remove_empty_parents(plan.backup_root.parent, plan.state_dir)
+            raise MigrationError(f"migration rolled back: {error}") from error
 
 
 def _assert_external_tree_no_reparse(root: Path) -> None:
@@ -618,6 +805,7 @@ def _bundle_changes(base: Path, stage: Path, state_dir: Path) -> list[Change]:
     skills_source = stage / "skills"
     _assert_external_tree_no_reparse(skills_source)
     skills_destination = _assert_safe_path(base, base / "skills")
+    owned = _owned_manifest(base, state_dir)
     changes = []
     for source in sorted(skills_source.iterdir()):
         if not source.is_dir():
@@ -625,9 +813,16 @@ def _bundle_changes(base: Path, stage: Path, state_dir: Path) -> list[Change]:
         destination = _assert_safe_path(base, skills_destination / source.name)
         if destination.exists():
             marker = destination / ".agent-workflow-skills-owned"
-            if not marker.is_file():
+            skill = destination / "SKILL.md"
+            key = f"skills/{source.name}/SKILL.md"
+            if (
+                not marker.is_file()
+                or not skill.is_file()
+                or owned is None
+                or owned.get(key) != _sha256(skill.read_bytes())
+            ):
                 raise MigrationError(
-                    f"skill already exists and is not bundle-owned: {destination}"
+                    f"skill ownership marker or manifest is invalid: {destination}"
                 )
         changes.extend(_changes_for_tree(base, source, destination))
     agents = _assert_safe_path(base, base / "AGENTS.md")
@@ -668,20 +863,25 @@ def install_transaction(
     fail_after_write: int | None = None,
     backup_id: str | None = None,
 ) -> None:
-    plan = build_migration_plan(base, binding, audit, explicit, backup_id)
-    outer = _bundle_changes(plan.base, stage, plan.state_dir)
     if check:
+        plan = build_migration_plan(base, binding, audit, explicit, backup_id)
+        _bundle_changes(plan.base, stage, plan.state_dir)
         return
-    try:
-        _apply_transaction(
-            [*plan.changes, *outer],
-            fail_after_write=fail_after_write,
-            base=plan.base,
-        )
-    except OSError as error:
-        shutil.rmtree(plan.backup_root, ignore_errors=True)
-        _remove_empty_parents(plan.backup_root.parent, plan.state_dir)
-        raise MigrationError(f"OpenCode install rolled back: {error}") from error
+    absolute_base = _absolute(base)
+    state_dir = _assert_safe_path(absolute_base, Path(audit).parent)
+    with MigrationLock(absolute_base, state_dir):
+        plan = build_migration_plan(absolute_base, binding, audit, explicit, backup_id)
+        outer = _bundle_changes(plan.base, stage, plan.state_dir)
+        try:
+            _apply_transaction(
+                [*plan.changes, *outer],
+                fail_after_write=fail_after_write,
+                base=plan.base,
+            )
+        except (OSError, MigrationError) as error:
+            shutil.rmtree(plan.backup_root, ignore_errors=True)
+            _remove_empty_parents(plan.backup_root.parent, plan.state_dir)
+            raise MigrationError(f"OpenCode install rolled back: {error}") from error
 
 
 def _failure_injection(value: int | None) -> int | None:
@@ -707,17 +907,18 @@ def _validate_audit(audit: dict) -> tuple[str, dict]:
     if audit.get("bundle") != BUNDLE or audit.get("version") != AUDIT_VERSION:
         raise MigrationError("unrecognized OpenCode model migration audit")
     config = audit.get("config")
-    managed = audit.get("managed_roles")
-    if not isinstance(config, str) or not isinstance(managed, dict):
+    model_hashes = audit.get("managed_model_sha256")
+    if not isinstance(config, str) or not isinstance(model_hashes, dict):
         raise MigrationError("invalid OpenCode model migration audit")
-    for role, fixed in ROLE_FIELDS.items():
-        expected = managed.get(role)
-        if not isinstance(expected, dict) or not isinstance(expected.get("model"), str):
+    for role in ROLE_FIELDS:
+        expected = model_hashes.get(role)
+        if not isinstance(expected, str) or not re.fullmatch(r"[0-9a-f]{64}", expected):
             raise MigrationError(f"invalid managed role audit for {role}")
-        for key, value in fixed.items():
-            if expected.get(key) != value:
-                raise MigrationError(f"invalid managed role audit for {role}")
-    return config, managed
+    for key in ("binding_sha256", "config_sha256"):
+        value = audit.get(key)
+        if not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{64}", value):
+            raise MigrationError(f"invalid OpenCode model migration audit {key}")
+    return config, model_hashes
 
 
 def uninstall(base: Path, audit_path: Path) -> None:
@@ -730,7 +931,7 @@ def uninstall(base: Path, audit_path: Path) -> None:
         audit = parse_jsonc(audit_path.read_bytes().decode("utf-8-sig"))
     except (OSError, UnicodeError, ValueError, json.JSONDecodeError) as error:
         raise MigrationError(f"invalid OpenCode model migration audit: {error}") from error
-    config_relative, managed = _validate_audit(audit)
+    config_relative, model_hashes = _validate_audit(audit)
     config = _assert_safe_path(base, base / config_relative)
     if config.name not in {"opencode.json", "opencode.jsonc"} or not config.exists():
         raise MigrationError("managed OpenCode config is missing or invalid")
@@ -739,13 +940,15 @@ def uninstall(base: Path, audit_path: Path) -> None:
     roles = data.get("agent")
     if not isinstance(roles, dict):
         raise MigrationError("managed OpenCode agent configuration is missing")
-    for role, expected in managed.items():
+    for role, expected_hash in model_hashes.items():
         current = roles.get(role)
         if not isinstance(current, dict):
             continue
-        for key, value in expected.items():
-            if current.get(key) == value:
-                del current[key]
+        if (
+            isinstance(current.get("model"), str)
+            and _sha256(current["model"].encode("utf-8")) == expected_hash
+        ):
+            del current["model"]
         if not current:
             del roles[role]
     if not roles:
