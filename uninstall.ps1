@@ -25,7 +25,6 @@ $ErrorActionPreference = 'Stop'
 $RepoRoot = $PSScriptRoot
 $BeginMarker = '<!-- BEGIN agent-workflow-skills spine -->'
 $EndMarker = '<!-- END agent-workflow-skills spine -->'
-$AgentMarker = '<!-- Managed by agent-workflow-skills. -->'
 $SkillMarker = '.agent-workflow-skills-owned'
 $OpenCodeBase = if ($OpenCodeConfigDir) { $OpenCodeConfigDir } else { Join-Path $env:USERPROFILE '.config\opencode' }
 $summary = New-Object System.Collections.Generic.List[string]
@@ -47,6 +46,17 @@ function Write-NoBom([string]$Path, [string]$Text) {
 
 function Read-Utf8([string]$Path) {
     return [System.IO.File]::ReadAllText($Path, $Utf8Strict)
+}
+
+function Resolve-Python {
+    foreach ($name in @('python3', 'python')) {
+        $command = Get-Command $name -ErrorAction SilentlyContinue
+        if ($command) {
+            & $command.Source -c 'import sys; raise SystemExit(0 if sys.version_info.major == 3 else 1)'
+            if ($LASTEXITCODE -eq 0) { return $command.Source }
+        }
+    }
+    throw 'A runnable Python 3 interpreter is required to verify managed OpenCode role fields.'
 }
 
 function Test-SpineMarkerIntegrity([string]$File) {
@@ -115,24 +125,29 @@ function Uninstall-OpenCode {
     $base = $OpenCodeBase
     $state = Join-Path $base 'agent-workflow-skills\install-state.json'
     $owned = Test-Path $state
+    $audit = Join-Path $base 'agent-workflow-skills\opencode-model-migration.json'
+    if ($owned -and (Test-Path $audit)) {
+        $python = Resolve-Python
+        & $python (Join-Path $RepoRoot 'tools\migrate_opencode_models.py') `
+            '--config-dir' $base '--binding' (Join-Path $base 'agent-workflow-skills\model-routing.jsonc') `
+            '--audit' $audit '--uninstall' | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            throw 'OpenCode model config uninstall failed; managed role fields were not changed.'
+        }
+    }
     Remove-Skills (Join-Path $base 'skills')
     $summary.Add("opencode: removed bundle skills from $base\skills")
     $agents = Join-Path $base 'AGENTS.md'
     Remove-SpineBlock $agents
     $summary.Add("opencode: removed spine marker block from $agents")
-    foreach ($name in @('build.md', 'reason.md', 'review.md')) {
-        $path = Join-Path $base "agents\$name"
-        if ((Test-Path -LiteralPath $path) -and (Read-Utf8 $path).Contains($AgentMarker)) {
-            Remove-Item -Force -LiteralPath $path
-        }
-    }
-    $summary.Add("opencode: processed native agents in $base\agents (removed only when bundle-owned; main config untouched)")
     if ($owned) {
-        foreach ($name in @('model-routing.jsonc', 'dispatch_resolver.py', 'validate_jsonc.py')) {
+        foreach ($name in @('model-routing.jsonc', 'dispatch_resolver.py', 'validate_jsonc.py', 'opencode-model-migration.json')) {
             Remove-Item -Force (Join-Path $base "agent-workflow-skills\$name") -ErrorAction SilentlyContinue
         }
+        Remove-Item -Recurse -Force (Join-Path $base 'agent-workflow-skills\migration-backups') -ErrorAction SilentlyContinue
         Remove-Item -Force $state
     }
+    $summary.Add("opencode: removed only verified managed JSON role fields; no Markdown role agents were restored")
 }
 
 function Uninstall-Claude {

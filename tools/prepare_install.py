@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 CURSOR_MODEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 OPENCODE_MODEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*(/[A-Za-z0-9][A-Za-z0-9._-]*)+$")
 RESERVED = {"provider", "model", "placeholder", "example", "change-me", "your-provider", "your-model"}
-FORBIDDEN = ("gpt-5.6-", "glm-5.2-max", "huawei/")
+FORBIDDEN = ("model: ",)
 OWNER = ".agent-workflow-skills-owned"
 
 
@@ -41,15 +41,6 @@ def _binding(path, supplied, platform):
     if review in (build, effective_reason):
         raise ValueError("review model binding must differ from build and effective reason")
     return data, (build, effective_reason, review)
-
-
-def _render(source, target, replacements):
-    text = source.read_text(encoding="utf-8")
-    for key, value in replacements.items():
-        text = text.replace(key, value)
-    if "__" in text:
-        raise ValueError(f"unresolved placeholder in {source}")
-    target.write_text(text, encoding="utf-8", newline="\n")
 
 
 def _hash(path):
@@ -85,16 +76,8 @@ def _stage(stage, binding_path, platform, profile, supplied):
             (skill / OWNER).write_text("agent-workflow-skills\n", encoding="utf-8", newline="\n")
     shutil.copy2(_adapter_source(platform, profile), stage / "workflow-gate.mdc")
     if platform != "claude":
-        if platform == "opencode":
-            (stage / "agents").mkdir()
-            for name, model in zip(("build", "reason", "review"), models):
-                _render(ROOT / f"opencode/agents/{name}.md", stage / f"agents/{name}.md", {"__OPENCODE_MODEL__": model})
-        else:
-            _render(
-                ROOT / "cursor/model-routing.mdc",
-                stage / "model-routing.mdc",
-                {"__BUILD_MODEL__": models[0], "__REASON_MODEL__": models[1], "__REVIEW_MODEL__": models[2]},
-            )
+        if platform == "cursor":
+            shutil.copy2(ROOT / "cursor/model-routing.mdc", stage / "model-routing.mdc")
         binding_text = "// Edit role IDs, then rerun the installer.\n" + json.dumps(data, ensure_ascii=False, indent=2) + "\n"
         (stage / "model-routing.jsonc").write_text(binding_text, encoding="utf-8", newline="\n")
         for name in ("dispatch_resolver.py", "validate_jsonc.py"):
@@ -102,9 +85,7 @@ def _stage(stage, binding_path, platform, profile, supplied):
     policy_owned = [stage / "workflow-gate.mdc", *(stage / "skills").glob("*/SKILL.md")]
     owned = [*policy_owned]
     if platform != "claude":
-        if platform == "opencode":
-            owned.extend((stage / "agents").glob("*.md"))
-        else:
+        if platform == "cursor":
             owned.append(stage / "model-routing.mdc")
         owned.extend((
             stage / "model-routing.jsonc",
@@ -113,7 +94,7 @@ def _stage(stage, binding_path, platform, profile, supplied):
         ))
     state = {
         "bundle": "agent-workflow-skills",
-        "version": 2,
+        "version": 3,
         "platform": platform,
         "profile": profile,
         "owned_sha256": {str(path.relative_to(stage)).replace("\\", "/"): _hash(path) for path in owned},
@@ -126,8 +107,6 @@ def _stage(stage, binding_path, platform, profile, supplied):
     text = "\n".join(path.read_text(encoding="utf-8").lower() for path in portable)
     if any(token in text for token in FORBIDDEN):
         raise ValueError("portable runtime policy contains a concrete machine model identifier")
-    if platform == "opencode" and "edit: deny" not in (stage / "agents/review.md").read_text(encoding="utf-8"):
-        raise ValueError("review agent must deny edits")
     return models
 
 

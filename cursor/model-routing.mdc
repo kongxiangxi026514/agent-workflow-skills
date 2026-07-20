@@ -5,11 +5,11 @@ alwaysApply: true
 
 # Model bindings
 
-- `build`: `__BUILD_MODEL__`
-- `reason`: `__REASON_MODEL__`
-- `review`: `__REVIEW_MODEL__`
-
-Use these project-local bindings for dispatch. Review must remain independent; the installer enforces ID inequality, not model-family identity.
+Concrete role IDs exist only in `.cursor/agent-workflow-skills/model-routing.jsonc`.
+Read that machine-local JSONC binding through `dispatch_resolver.py`; this rule
+never renders or duplicates an ID. `reason: null` reuses `build`. Review must
+remain independent; the installer enforces ID inequality, not model-family
+identity.
 
 Before every native subagent dispatch, run the installed `dispatch_resolver.py` for the selected role. If Cursor exposes its model registry, supply the full list and fail when `requested_model` is absent. Pass the returned `subagent_type` and exact `model` fields without fallback. Record a receipt containing `role`, `requested_model`, `actual_model` when observable, and `cross_model`. If Cursor does not expose the runtime model, use `cross_model=unverified`. Same-family review is independent-context review.
 <!-- Managed by agent-workflow-skills. -->

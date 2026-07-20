@@ -107,7 +107,7 @@ def resolve_dispatch(
         native_model_source = "dispatch-argument"
     else:
         native_dispatch = {"agent": role}
-        native_model_source = "agent-frontmatter"
+        native_model_source = "agent-json-config"
     return {
         "platform": platform,
         "role": role,

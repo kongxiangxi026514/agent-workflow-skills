@@ -276,6 +276,7 @@ def migrate(
     audit: Path,
     explicit: str | None,
     fail_after_write: int | None = None,
+    check: bool = False,
 ) -> None:
     base = _absolute(base)
     state_dir = _assert_safe_path(base, audit.parent)
@@ -288,6 +289,8 @@ def migrate(
     config_after = (json.dumps(updated, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
     changes = [Change(selected, config_before, config_after)]
     changes.extend(_markdown_changes(base, state_dir))
+    if check:
+        return
     backup_root = state_dir / "migration-backups" / uuid.uuid4().hex
     payload = _audit_payload(base, selected, changes, managed, backup_root)
     audit_after = (json.dumps(payload, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
@@ -377,14 +380,15 @@ def main() -> int:
     parser.add_argument("--audit", type=Path, required=True)
     parser.add_argument("--opencode-model-config")
     parser.add_argument("--uninstall", action="store_true")
+    parser.add_argument("--check", action="store_true")
     parser.add_argument("--fail-after-write", type=int)
     args = parser.parse_args()
     try:
         if args.fail_after_write is not None and args.fail_after_write < 1:
             raise MigrationError("--fail-after-write must be positive")
         if args.uninstall:
-            if args.fail_after_write is not None:
-                raise MigrationError("--fail-after-write is only valid for migration")
+            if args.fail_after_write is not None or args.check:
+                raise MigrationError("--check and --fail-after-write are only valid for migration")
             uninstall(args.config_dir, args.audit)
         else:
             migrate(
@@ -393,6 +397,7 @@ def main() -> int:
                 args.audit,
                 args.opencode_model_config,
                 args.fail_after_write,
+                args.check,
             )
     except (MigrationError, OSError, UnicodeError) as error:
         print(f"OpenCode model migration failed: {error}", file=sys.stderr)

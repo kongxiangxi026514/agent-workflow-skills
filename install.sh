@@ -10,6 +10,8 @@ set -euo pipefail
 TOOL="cursor"
 PROJECT=""
 OPENCODE_CONFIG_DIR=""
+OPENCODE_MODEL_CONFIG=""
+MIGRATE_OPENCODE_MODEL_CONFIG=0
 PROFILE=""
 PROFILE_SET=0
 GENERIC_BUILD_MODEL=""
@@ -30,6 +32,9 @@ while [ $# -gt 0 ]; do
     --project=*) PROJECT="${1#*=}"; shift ;;
     --opencode-config-dir) OPENCODE_CONFIG_DIR="${2:-}"; shift 2 ;;
     --opencode-config-dir=*) OPENCODE_CONFIG_DIR="${1#*=}"; shift ;;
+    --opencode-model-config) OPENCODE_MODEL_CONFIG="${2:-}"; shift 2 ;;
+    --opencode-model-config=*) OPENCODE_MODEL_CONFIG="${1#*=}"; shift ;;
+    --migrate-opencode-model-config) MIGRATE_OPENCODE_MODEL_CONFIG=1; shift ;;
     --profile) PROFILE="${2:-}"; PROFILE_SET=1; shift 2 ;;
     --profile=*) PROFILE="${1#*=}"; PROFILE_SET=1; shift ;;
     --build-model) GENERIC_BUILD_MODEL="${2:-}"; shift 2 ;;
@@ -80,8 +85,6 @@ REPO_ROOT="$(cd "$(dirname "$0")" && pwd)"
 BEGIN_MARKER='<!-- BEGIN agent-workflow-skills spine -->'
 END_MARKER='<!-- END agent-workflow-skills spine -->'
 SUMMARY=()
-OPENCODE_CONFIG=""
-AGENT_MARKER='<!-- Managed by agent-workflow-skills. -->'
 SKILL_MARKER='.agent-workflow-skills-owned'
 OPENCODE_BASE="${OPENCODE_CONFIG_DIR:-$HOME/.config/opencode}"
 OPENCODE_STAGE=""; CURSOR_STAGE=""; CLAUDE_STAGE=""
@@ -141,19 +144,9 @@ assert_spine_markers() {
 
 preflight_opencode() {
   base="$OPENCODE_BASE"
-  json="$base/opencode.json"
-  jsonc="$base/opencode.jsonc"
-  [ ! -f "$json" ] || OPENCODE_CONFIG="$json"
-  [ ! -f "$jsonc" ] || OPENCODE_CONFIG="${OPENCODE_CONFIG:+$OPENCODE_CONFIG, }$jsonc"
   state="$base/agent-workflow-skills/install-state.json"
   binding="$base/agent-workflow-skills/model-routing.jsonc"
   if [ -f "$binding" ] && [ ! -f "$state" ]; then echo "Model binding exists without bundle ownership: $binding" >&2; return 1; fi
-  for agent in "$base/agents/build.md" "$base/agents/reason.md" "$base/agents/review.md"; do
-    if [ -f "$agent" ] && ! grep -Fq "$AGENT_MARKER" "$agent"; then
-      echo "OpenCode agent already exists and is not bundle-owned: $agent. Nothing was installed." >&2
-      return 1
-    fi
-  done
   preflight_skills "$base/skills"
 }
 
@@ -209,12 +202,13 @@ set_spine_block() {
   mv -f "$tmp" "$file"
 }
 
-render_opencode_agent() {
-  name="$1"; model="$2"; dest="$3"; source="$REPO_ROOT/opencode/agents/$name.md"
-  if ! grep -Fq '__OPENCODE_MODEL__' "$source"; then
-    echo "OpenCode agent template is missing its model placeholder: $name.md" >&2; return 1
-  fi
-  sed "s|__OPENCODE_MODEL__|$model|g" "$source" > "$dest"
+preflight_opencode_model_migration() {
+  binding="$1"; python_cmd="$(resolve_python)"
+  migration=(--config-dir "$OPENCODE_BASE" --binding "$binding" \
+    --audit "$OPENCODE_BASE/agent-workflow-skills/opencode-model-migration.json" --check)
+  [ -z "$OPENCODE_MODEL_CONFIG" ] || migration+=(--opencode-model-config "$OPENCODE_MODEL_CONFIG")
+  "$python_cmd" "$REPO_ROOT/tools/migrate_opencode_models.py" "${migration[@]}" ||
+    { echo "OpenCode model config migration preflight failed. Nothing was installed." >&2; return 1; }
 }
 
 install_cursor() {
@@ -239,15 +233,17 @@ install_opencode() {
   SUMMARY+=("opencode: skills -> $base/skills")
   set_spine_block "$base/AGENTS.md" "$OPENCODE_STAGE/workflow-gate.mdc"
   SUMMARY+=("opencode: spine injected -> $base/AGENTS.md (marker block)")
-  mkdir -p "$base/agents"
-  cp -f "$OPENCODE_STAGE"/agents/*.md "$base/agents/"
   mkdir -p "$base/agent-workflow-skills"
   cp -f "$OPENCODE_STAGE/model-routing.jsonc" "$OPENCODE_STAGE/dispatch_resolver.py" \
     "$OPENCODE_STAGE/validate_jsonc.py" "$OPENCODE_STAGE/install-state.json" "$base/agent-workflow-skills/"
-  SUMMARY+=("opencode: native agents -> $base/agents/{build,reason,review}.md")
   SUMMARY+=("opencode: model binding -> $base/agent-workflow-skills/model-routing.jsonc")
-  config_label="${OPENCODE_CONFIG:-none present; none created}"
-  SUMMARY+=("opencode: main config untouched -> $config_label")
+  python_cmd="$(resolve_python)"
+  migration=(--config-dir "$base" --binding "$base/agent-workflow-skills/model-routing.jsonc" \
+    --audit "$base/agent-workflow-skills/opencode-model-migration.json")
+  [ -z "$OPENCODE_MODEL_CONFIG" ] || migration+=(--opencode-model-config "$OPENCODE_MODEL_CONFIG")
+  "$python_cmd" "$REPO_ROOT/tools/migrate_opencode_models.py" "${migration[@]}" ||
+    { echo "OpenCode model config migration failed; its config changes were rolled back." >&2; return 1; }
+  SUMMARY+=("opencode: role models -> selected JSON/JSONC config (audited migration)")
 }
 
 install_claude() {
@@ -266,10 +262,15 @@ if { [ "$TOOL" = cursor ] || [ "$TOOL" = all ]; } && [ -z "$PROJECT" ]; then
   exit 1
 fi
 if [ "$TOOL" = opencode ] || [ "$TOOL" = all ]; then
+  if [ "$MIGRATE_OPENCODE_MODEL_CONFIG" != 1 ]; then
+    echo "OpenCode JSON/JSONC model migration requires --migrate-opencode-model-config. Nothing was installed." >&2
+    exit 1
+  fi
   preflight_opencode
   assert_spine_markers "$OPENCODE_BASE/AGENTS.md"
   verify_policy_ownership "$OPENCODE_BASE/agent-workflow-skills/install-state.json" "$OPENCODE_BASE/AGENTS.md" "$OPENCODE_BASE/skills" 1
   OPENCODE_STAGE="$(new_install_stage "$OPENCODE_BASE/agent-workflow-skills/model-routing.jsonc" opencode "$(profile_for opencode)" "$OPENCODE_BUILD_MODEL" "$OPENCODE_REASON_MODEL" "$OPENCODE_REVIEW_MODEL")"
+  preflight_opencode_model_migration "$OPENCODE_STAGE/model-routing.jsonc"
 fi
 if [ "$TOOL" = cursor ] || [ "$TOOL" = all ]; then
   state="$PROJECT/.cursor/agent-workflow-skills/install-state.json"

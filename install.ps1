@@ -20,6 +20,8 @@ param(
     [string]$Tool = 'cursor',
     [string]$Project,
     [string]$OpenCodeConfigDir,
+    [string]$OpenCodeModelConfig,
+    [switch]$MigrateOpenCodeModelConfig,
     [ValidateSet('lean', 'balanced')][string]$Profile,
     [string]$BuildModel,
     [string]$ReasonModel,
@@ -36,7 +38,6 @@ $ErrorActionPreference = 'Stop'
 $RepoRoot = $PSScriptRoot
 $BeginMarker = '<!-- BEGIN agent-workflow-skills spine -->'
 $EndMarker = '<!-- END agent-workflow-skills spine -->'
-$AgentMarker = '<!-- Managed by agent-workflow-skills. -->'
 $SkillMarker = '.agent-workflow-skills-owned'
 $OpenCodeBase = if ($OpenCodeConfigDir) { $OpenCodeConfigDir } else { Join-Path $env:USERPROFILE '.config\opencode' }
 if ($Tool -eq 'all' -and ($BuildModel -or $ReasonModel -or $ReviewModel)) {
@@ -134,20 +135,11 @@ function Test-SpineMarkerIntegrity([string]$File) {
     }
 }
 
-function Test-OpenCodeConfig {
-    $present = @('opencode.json', 'opencode.jsonc') | Where-Object { Test-Path -LiteralPath (Join-Path $OpenCodeBase $_) }
-    $config = if ($present.Count) { ($present | ForEach-Object { Join-Path $OpenCodeBase $_ }) -join ', ' } else { $null }
+function Test-OpenCodeInstallOwnership {
     $state = Join-Path $OpenCodeBase 'agent-workflow-skills\install-state.json'
     $binding = Join-Path $OpenCodeBase 'agent-workflow-skills\model-routing.jsonc'
     if ((Test-Path $binding) -and -not (Test-Path $state)) { throw "Model binding exists without bundle ownership: $binding. Nothing was installed." }
-    foreach ($name in @('build.md', 'reason.md', 'review.md')) {
-        $agent = Join-Path $OpenCodeBase "agents\$name"
-        if ((Test-Path -LiteralPath $agent) -and -not (Read-Utf8 $agent).Contains($AgentMarker)) {
-            throw "OpenCode agent already exists and is not bundle-owned: $agent. Nothing was installed."
-        }
-    }
     Test-SkillOwnership (Join-Path $OpenCodeBase 'skills')
-    return $config
 }
 
 function Test-SkillOwnership([string]$DestSkillsDir) {
@@ -214,6 +206,22 @@ function Set-SpineBlock([string]$File, [string]$Source) {
     Write-NoBom $File $new
 }
 
+function Test-OpenCodeModelMigration([string]$Binding) {
+    $python = Resolve-Python
+    $migration = @(
+        (Join-Path $RepoRoot 'tools\migrate_opencode_models.py'),
+        '--config-dir', $OpenCodeBase,
+        '--binding', $Binding,
+        '--audit', (Join-Path $OpenCodeBase 'agent-workflow-skills\opencode-model-migration.json'),
+        '--check'
+    )
+    if ($OpenCodeModelConfig) { $migration += @('--opencode-model-config', $OpenCodeModelConfig) }
+    & $python @migration | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        throw 'OpenCode model config migration preflight failed. Nothing was installed.'
+    }
+}
+
 function Install-Cursor {
     $skillsDir = Join-Path $env:USERPROFILE '.cursor\skills'
     Copy-Skills $skillsDir (Join-Path $script:CursorStage 'skills')
@@ -237,16 +245,19 @@ function Install-OpenCode {
     $agents = Join-Path $base 'AGENTS.md'
     Set-SpineBlock $agents (Join-Path $script:OpenCodeStage 'workflow-gate.mdc')
     $summary.Add("opencode: spine injected -> $agents (marker block)")
-    $agentDir = Join-Path $base 'agents'
-    if (-not (Test-Path $agentDir)) { New-Item -ItemType Directory -Path $agentDir -Force | Out-Null }
-    foreach ($name in @('build.md', 'reason.md', 'review.md')) {
-        Copy-Item -Force (Join-Path $script:OpenCodeStage "agents\$name") (Join-Path $agentDir $name)
-    }
     Set-BundleState (Join-Path $base 'agent-workflow-skills') $script:OpenCodeStage
-    $summary.Add("opencode: native agents -> $agentDir\{build,reason,review}.md")
     $summary.Add("opencode: model binding -> $base\agent-workflow-skills\model-routing.jsonc")
-    $configLabel = if ($script:OpenCodeConfig) { $script:OpenCodeConfig } else { 'none present; none created' }
-    $summary.Add("opencode: main config untouched -> $configLabel")
+    $python = Resolve-Python
+    $migration = @(
+        (Join-Path $RepoRoot 'tools\migrate_opencode_models.py'),
+        '--config-dir', $base,
+        '--binding', (Join-Path $base 'agent-workflow-skills\model-routing.jsonc'),
+        '--audit', (Join-Path $base 'agent-workflow-skills\opencode-model-migration.json')
+    )
+    if ($OpenCodeModelConfig) { $migration += @('--opencode-model-config', $OpenCodeModelConfig) }
+    & $python @migration | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw 'OpenCode model config migration failed; its config changes were rolled back.' }
+    $summary.Add("opencode: role models -> selected JSON/JSONC config (audited migration)")
 }
 
 function Install-Claude {
@@ -265,13 +276,17 @@ if (($Tool -eq 'cursor' -or $Tool -eq 'all') -and -not $Project) {
     throw '-Project is required for Cursor installation so the forced spine is installed automatically. Nothing was installed.'
 }
 if ($Tool -eq 'opencode' -or $Tool -eq 'all') {
-    $script:OpenCodeConfig = Test-OpenCodeConfig
+    if (-not $MigrateOpenCodeModelConfig) {
+        throw 'OpenCode JSON/JSONC model migration requires -MigrateOpenCodeModelConfig. Nothing was installed.'
+    }
+    Test-OpenCodeInstallOwnership
     $opencodeSpine = Join-Path $OpenCodeBase 'AGENTS.md'
     $opencodeState = Join-Path $OpenCodeBase 'agent-workflow-skills\install-state.json'
     Test-SpineMarkerIntegrity $opencodeSpine
     Test-PolicyArtifactOwnership $opencodeState $opencodeSpine (Join-Path $OpenCodeBase 'skills') $true
     $models = @($OpenCodeBuildModel, $OpenCodeReasonModel, $OpenCodeReviewModel)
     $script:OpenCodeStage = New-InstallStage (Join-Path $OpenCodeBase 'agent-workflow-skills\model-routing.jsonc') 'opencode' (Get-Profile 'opencode') $models
+    Test-OpenCodeModelMigration (Join-Path $script:OpenCodeStage 'model-routing.jsonc')
 }
 if ($Tool -eq 'cursor' -or $Tool -eq 'all') {
     $cursorState = Join-Path $Project '.cursor\agent-workflow-skills\install-state.json'

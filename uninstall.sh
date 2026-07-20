@@ -29,10 +29,18 @@ done
 REPO_ROOT="$(cd "$(dirname "$0")" && pwd)"
 BEGIN_MARKER='<!-- BEGIN agent-workflow-skills spine -->'
 END_MARKER='<!-- END agent-workflow-skills spine -->'
-AGENT_MARKER='<!-- Managed by agent-workflow-skills. -->'
 SKILL_MARKER='.agent-workflow-skills-owned'
 OPENCODE_BASE="${OPENCODE_CONFIG_DIR:-$HOME/.config/opencode}"
 SUMMARY=()
+
+resolve_python() {
+  for candidate in python3 python; do
+    if command -v "$candidate" >/dev/null 2>&1 && "$candidate" -c 'import sys; raise SystemExit(sys.version_info.major != 3)'; then
+      printf '%s\n' "$candidate"; return 0
+    fi
+  done
+  echo "A runnable Python 3 interpreter is required to verify managed OpenCode role fields." >&2; return 1
+}
 
 remove_skills() {
   # Only remove the skill folders that this bundle ships (never a whole skills dir).
@@ -89,19 +97,26 @@ uninstall_cursor() {
 uninstall_opencode() {
   base="$OPENCODE_BASE"; state="$base/agent-workflow-skills/install-state.json"
   owned=0; [ ! -f "$state" ] || owned=1
+  audit="$base/agent-workflow-skills/opencode-model-migration.json"
+  if [ "$owned" = 1 ] && [ -f "$audit" ]; then
+    python_cmd="$(resolve_python)"
+    "$python_cmd" "$REPO_ROOT/tools/migrate_opencode_models.py" \
+      --config-dir "$base" --binding "$base/agent-workflow-skills/model-routing.jsonc" \
+      --audit "$audit" --uninstall ||
+      { echo "OpenCode model config uninstall failed; managed role fields were not changed." >&2; return 1; }
+  fi
   remove_skills "$base/skills"
   SUMMARY+=("opencode: removed bundle skills from $base/skills")
   remove_spine_block "$base/AGENTS.md"
   SUMMARY+=("opencode: removed spine marker block from $base/AGENTS.md")
-  for agent in "$base/agents/build.md" "$base/agents/reason.md" "$base/agents/review.md"; do
-    if [ -f "$agent" ] && grep -Fq "$AGENT_MARKER" "$agent"; then rm -f "$agent"; fi
-  done
-  SUMMARY+=("opencode: processed native agents in $base/agents (removed only when bundle-owned; main config untouched)")
   if [ "$owned" = 1 ]; then
     rm -f "$base/agent-workflow-skills/model-routing.jsonc" \
       "$base/agent-workflow-skills/dispatch_resolver.py" \
-      "$base/agent-workflow-skills/validate_jsonc.py" "$state"
+      "$base/agent-workflow-skills/validate_jsonc.py" \
+      "$base/agent-workflow-skills/opencode-model-migration.json" "$state"
+    rm -rf "$base/agent-workflow-skills/migration-backups"
   fi
+  SUMMARY+=("opencode: removed only verified managed JSON role fields; no Markdown role agents were restored")
 }
 
 uninstall_claude() {
