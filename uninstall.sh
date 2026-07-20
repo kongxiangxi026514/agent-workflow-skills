@@ -58,6 +58,31 @@ verify_managed_spine() {
     { echo "Managed spine provenance validation failed: $adapter" >&2; return 1; }
 }
 
+verify_cursor_ownership() {
+  skills="$HOME/.cursor/skills"
+  candidate=0
+  if [ -n "$PROJECT" ]; then
+    rules="$PROJECT/.cursor/rules"
+    bundle="$PROJECT/.cursor/agent-workflow-skills"
+    state="$bundle/install-state.json"
+    [ ! -f "$state" ] || candidate=1
+    [ ! -e "$rules/workflow-gate.mdc" ] || candidate=1
+    [ ! -e "$rules/model-routing.mdc" ] || candidate=1
+  fi
+  for source in "$REPO_ROOT"/policy-v3/generated/skills/*/; do
+    [ ! -e "$skills/$(basename "$source")" ] || candidate=1
+  done
+  [ "$candidate" = 0 ] && return 0
+  if [ -z "$PROJECT" ] || [ ! -f "$state" ]; then
+    echo "Cursor bundle artifacts require --project and a valid install-state.json. Nothing was uninstalled." >&2
+    return 1
+  fi
+  python_cmd="$(resolve_python)"
+  "$python_cmd" "$REPO_ROOT/tools/verify_cursor_ownership.py" \
+    --state "$state" --rules "$rules" --skills "$skills" --bundle "$bundle" ||
+    { echo "Cursor ownership validation failed. Nothing was uninstalled." >&2; return 1; }
+}
+
 remove_skills() {
   # Only remove the skill folders that this bundle ships (never a whole skills dir).
   dest="$1"
@@ -94,6 +119,7 @@ uninstall_cursor() {
   skills_dir="$HOME/.cursor/skills"
   state="${PROJECT:+$PROJECT/.cursor/agent-workflow-skills/install-state.json}"
   owned=0; [ -z "$state" ] || [ ! -f "$state" ] || owned=1
+  verify_cursor_ownership
   remove_skills "$skills_dir"
   SUMMARY+=("cursor: removed bundle skills from $skills_dir")
   if [ -n "$PROJECT" ]; then
@@ -114,14 +140,22 @@ uninstall_opencode() {
   base="$OPENCODE_BASE"; state="$base/agent-workflow-skills/install-state.json"
   owned=0; [ ! -f "$state" ] || owned=1
   audit="$base/agent-workflow-skills/opencode-model-migration.json"
+  verify_managed_spine "$state" "$base/AGENTS.md" "$base/skills"
+  if [ "$owned" = 1 ] && { [ ! -f "$audit" ] || [ ! -f "$base/AGENTS.md" ] || ! grep -Fqx "$BEGIN_MARKER" "$base/AGENTS.md"; }; then
+    echo "OpenCode bundle ownership state is incomplete; no files were changed." >&2
+    return 1
+  fi
   if [ "$owned" = 1 ] && [ -f "$audit" ]; then
     python_cmd="$(resolve_python)"
+    "$python_cmd" "$REPO_ROOT/tools/migrate_opencode_models.py" \
+      --config-dir "$base" --binding "$base/agent-workflow-skills/model-routing.jsonc" \
+      --audit "$audit" --uninstall --check ||
+      { echo "OpenCode uninstall preflight failed; no files were changed." >&2; return 1; }
     "$python_cmd" "$REPO_ROOT/tools/migrate_opencode_models.py" \
       --config-dir "$base" --binding "$base/agent-workflow-skills/model-routing.jsonc" \
       --audit "$audit" --uninstall ||
       { echo "OpenCode model config uninstall failed; managed role fields were not changed." >&2; return 1; }
   fi
-  verify_managed_spine "$state" "$base/AGENTS.md" "$base/skills"
   remove_skills "$base/skills"
   SUMMARY+=("opencode: removed bundle skills from $base/skills")
   remove_spine_block "$base/AGENTS.md"

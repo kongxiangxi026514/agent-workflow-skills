@@ -76,6 +76,32 @@ function Test-ManagedSpineOwnership([string]$State, [string]$Adapter, [string]$S
     }
 }
 
+function Test-CursorOwnership {
+    $skills = Join-Path $env:USERPROFILE '.cursor\skills'
+    $rules = if ($Project) { Join-Path $Project '.cursor\rules' } else { $null }
+    $bundle = if ($Project) { Join-Path $Project '.cursor\agent-workflow-skills' } else { $null }
+    $state = if ($bundle) { Join-Path $bundle 'install-state.json' } else { $null }
+    $candidate = $state -and (Test-Path -LiteralPath $state)
+    if ($Project) {
+        foreach ($name in @('workflow-gate.mdc', 'model-routing.mdc')) {
+            $candidate = $candidate -or (Test-Path -LiteralPath (Join-Path $rules $name))
+        }
+    }
+    foreach ($source in Get-ChildItem -Directory -LiteralPath (Join-Path $RepoRoot 'policy-v3\generated\skills')) {
+        $candidate = $candidate -or (Test-Path -LiteralPath (Join-Path $skills $source.Name))
+    }
+    if (-not $candidate) { return }
+    if (-not $Project -or -not (Test-Path -LiteralPath $state)) {
+        throw 'Cursor bundle artifacts require -Project and a valid install-state.json. Nothing was uninstalled.'
+    }
+    $python = Resolve-Python
+    & $python (Join-Path $RepoRoot 'tools\verify_cursor_ownership.py') `
+        '--state' $state '--rules' $rules '--skills' $skills '--bundle' $bundle | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Cursor ownership validation failed. Nothing was uninstalled.'
+    }
+}
+
 function Test-SpineMarkerIntegrity([string]$File) {
     if (-not (Test-Path -LiteralPath $File)) { return }
     $content = Read-Utf8 $File
@@ -120,6 +146,7 @@ function Uninstall-Cursor {
     $skillsDir = Join-Path $env:USERPROFILE '.cursor\skills'
     $state = if ($Project) { Join-Path $Project '.cursor\agent-workflow-skills\install-state.json' } else { $null }
     $owned = $state -and (Test-Path $state)
+    Test-CursorOwnership
     Remove-Skills $skillsDir
     $summary.Add("cursor: removed bundle skills from $skillsDir")
     if ($Project) {
@@ -143,8 +170,19 @@ function Uninstall-OpenCode {
     $state = Join-Path $base 'agent-workflow-skills\install-state.json'
     $owned = Test-Path $state
     $audit = Join-Path $base 'agent-workflow-skills\opencode-model-migration.json'
+    $agents = Join-Path $base 'AGENTS.md'
+    Test-ManagedSpineOwnership $state $agents (Join-Path $base 'skills')
+    if ($owned -and ((-not (Test-Path -LiteralPath $audit)) -or (-not (Test-Path -LiteralPath $agents)) -or (-not (Read-Utf8 $agents).Contains($BeginMarker)))) {
+        throw 'OpenCode bundle ownership state is incomplete; no files were changed.'
+    }
     if ($owned -and (Test-Path $audit)) {
         $python = Resolve-Python
+        & $python (Join-Path $RepoRoot 'tools\migrate_opencode_models.py') `
+            '--config-dir' $base '--binding' (Join-Path $base 'agent-workflow-skills\model-routing.jsonc') `
+            '--audit' $audit '--uninstall' '--check' | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            throw 'OpenCode uninstall preflight failed; no files were changed.'
+        }
         & $python (Join-Path $RepoRoot 'tools\migrate_opencode_models.py') `
             '--config-dir' $base '--binding' (Join-Path $base 'agent-workflow-skills\model-routing.jsonc') `
             '--audit' $audit '--uninstall' | Out-Null
@@ -152,8 +190,6 @@ function Uninstall-OpenCode {
             throw 'OpenCode model config uninstall failed; managed role fields were not changed.'
         }
     }
-    $agents = Join-Path $base 'AGENTS.md'
-    Test-ManagedSpineOwnership $state $agents (Join-Path $base 'skills')
     Remove-Skills (Join-Path $base 'skills')
     $summary.Add("opencode: removed bundle skills from $base\skills")
     Remove-SpineBlock $agents

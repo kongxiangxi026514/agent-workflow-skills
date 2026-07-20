@@ -394,11 +394,29 @@ def _strip_model_frontmatter(text: str) -> str:
                 "unsupported escaped YAML key syntax where a model key cannot be proven absent"
             )
         value = match["value"].strip()
+        if value.startswith(("[", "{", "]", "}", "|", ">", "&", "*", "!")):
+            raise MigrationError(
+                "unsupported YAML scalar or mapping syntax in agent frontmatter"
+            )
+        if value[:1] in {"'", '"'}:
+            quote = value[0]
+            escaped = False
+            closing = None
+            for value_index, char in enumerate(value[1:], 1):
+                if quote == '"' and char == "\\" and not escaped:
+                    escaped = True
+                    continue
+                if char == quote and not escaped:
+                    closing = value_index
+                    break
+                escaped = False
+            if closing is None or value[closing + 1 :].strip().split("#", 1)[0].strip():
+                raise MigrationError(
+                    "malformed quoted YAML scalar in agent frontmatter"
+                )
         if not MODEL_KEY.fullmatch(key):
             frontmatter.append(line)
             continue
-        if value.startswith(("|", ">", "{", "[", "&", "*", "!")):
-            raise MigrationError("unsupported complex YAML model value")
         next_line = lines[index + 1] if index + 1 < end else ""
         if not value and next_line and len(next_line) - len(next_line.lstrip(" ")) > len(match["indent"]):
             raise MigrationError("unsupported multiline YAML model value")
@@ -966,7 +984,7 @@ def _validate_audit(audit: dict) -> tuple[str, dict]:
     return config, model_hashes
 
 
-def uninstall(base: Path, audit_path: Path) -> None:
+def uninstall(base: Path, audit_path: Path, *, check: bool = False) -> None:
     base = _absolute(base)
     audit_path = _assert_safe_path(base, audit_path)
     if not audit_path.exists():
@@ -987,13 +1005,19 @@ def uninstall(base: Path, audit_path: Path) -> None:
         raise MigrationError("managed OpenCode agent configuration is missing")
     for role, expected_hash in model_hashes.items():
         current = roles.get(role)
-        if not isinstance(current, dict):
-            continue
         if (
-            isinstance(current.get("model"), str)
-            and _sha256(current["model"].encode("utf-8")) == expected_hash
+            not isinstance(current, dict)
+            or not isinstance(current.get("model"), str)
+            or _sha256(current["model"].encode("utf-8")) != expected_hash
         ):
-            del current["model"]
+            raise MigrationError(
+                f"managed OpenCode role model drifted: {role}"
+            )
+    if check:
+        return
+    for role in model_hashes:
+        current = roles[role]
+        del current["model"]
         if not current:
             del roles[role]
     if not roles:
@@ -1025,9 +1049,9 @@ def main() -> int:
         if args.fail_after_write is not None and args.fail_after_write < 1:
             raise MigrationError("--fail-after-write must be positive")
         if args.uninstall:
-            if args.fail_after_write is not None or args.check or args.backup_id or args.stage:
-                raise MigrationError("--check, --backup-id, --stage and --fail-after-write are only valid for migration")
-            uninstall(args.config_dir, args.audit)
+            if args.fail_after_write is not None or args.backup_id or args.stage:
+                raise MigrationError("--backup-id, --stage and --fail-after-write are only valid for migration")
+            uninstall(args.config_dir, args.audit, check=args.check)
         elif args.stage:
             install_transaction(
                 args.config_dir,

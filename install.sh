@@ -150,6 +150,31 @@ preflight_opencode() {
   preflight_skills "$base/skills"
 }
 
+verify_cursor_ownership() {
+  skills="$HOME/.cursor/skills"
+  candidate=0
+  if [ -n "$PROJECT" ]; then
+    rules="$PROJECT/.cursor/rules"
+    bundle="$PROJECT/.cursor/agent-workflow-skills"
+    state="$bundle/install-state.json"
+    [ ! -f "$state" ] || candidate=1
+    [ ! -e "$rules/workflow-gate.mdc" ] || candidate=1
+    [ ! -e "$rules/model-routing.mdc" ] || candidate=1
+  fi
+  for source in "$REPO_ROOT"/policy-v3/generated/skills/*/; do
+    [ ! -e "$skills/$(basename "$source")" ] || candidate=1
+  done
+  [ "$candidate" = 0 ] && return 0
+  if [ -z "$PROJECT" ] || [ ! -f "$state" ]; then
+    echo "Cursor bundle artifacts require --project and a valid install-state.json. Nothing was installed." >&2
+    return 1
+  fi
+  python_cmd="$(resolve_python)"
+  "$python_cmd" "$REPO_ROOT/tools/verify_cursor_ownership.py" \
+    --state "$state" --rules "$rules" --skills "$skills" --bundle "$bundle" ||
+    { echo "Cursor ownership validation failed. Nothing was installed." >&2; return 1; }
+}
+
 preflight_skills() {
   dest="$1"
   for d in "$REPO_ROOT"/policy-v3/generated/skills/*/; do
@@ -307,7 +332,8 @@ if [ "$TOOL" = cursor ] || [ "$TOOL" = all ]; then
   state="$PROJECT/.cursor/agent-workflow-skills/install-state.json"
   binding="$PROJECT/.cursor/agent-workflow-skills/model-routing.jsonc"
   if [ -f "$binding" ] && [ ! -f "$state" ]; then echo "Cursor model binding exists without bundle ownership." >&2; exit 1; fi
-    preflight_skills "$HOME/.cursor/skills"
+  verify_cursor_ownership
+  preflight_skills "$HOME/.cursor/skills"
   verify_policy_ownership "$state" "$PROJECT/.cursor/rules/workflow-gate.mdc" "$HOME/.cursor/skills" 0
   for rule in workflow-gate.mdc model-routing.mdc; do
     path="$PROJECT/.cursor/rules/$rule"

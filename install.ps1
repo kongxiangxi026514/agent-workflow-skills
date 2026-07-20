@@ -142,6 +142,32 @@ function Test-OpenCodeInstallOwnership {
     Test-SkillOwnership (Join-Path $OpenCodeBase 'skills')
 }
 
+function Test-CursorOwnership {
+    $skills = Join-Path $env:USERPROFILE '.cursor\skills'
+    $rules = if ($Project) { Join-Path $Project '.cursor\rules' } else { $null }
+    $bundle = if ($Project) { Join-Path $Project '.cursor\agent-workflow-skills' } else { $null }
+    $state = if ($bundle) { Join-Path $bundle 'install-state.json' } else { $null }
+    $candidate = $state -and (Test-Path -LiteralPath $state)
+    if ($Project) {
+        foreach ($name in @('workflow-gate.mdc', 'model-routing.mdc')) {
+            $candidate = $candidate -or (Test-Path -LiteralPath (Join-Path $rules $name))
+        }
+    }
+    foreach ($source in Get-ChildItem -Directory -LiteralPath (Join-Path $RepoRoot 'policy-v3\generated\skills')) {
+        $candidate = $candidate -or (Test-Path -LiteralPath (Join-Path $skills $source.Name))
+    }
+    if (-not $candidate) { return }
+    if (-not $Project -or -not (Test-Path -LiteralPath $state)) {
+        throw 'Cursor bundle artifacts require -Project and a valid install-state.json. Nothing was installed.'
+    }
+    $python = Resolve-Python
+    & $python (Join-Path $RepoRoot 'tools\verify_cursor_ownership.py') `
+        '--state' $state '--rules' $rules '--skills' $skills '--bundle' $bundle | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Cursor ownership validation failed. Nothing was installed.'
+    }
+}
+
 function Test-SkillOwnership([string]$DestSkillsDir) {
     Get-ChildItem -Directory -LiteralPath (Join-Path $RepoRoot 'policy-v3\generated\skills') | ForEach-Object {
         $dest = Join-Path $DestSkillsDir $_.Name
@@ -318,6 +344,7 @@ if ($Tool -eq 'cursor' -or $Tool -eq 'all') {
     $cursorState = Join-Path $Project '.cursor\agent-workflow-skills\install-state.json'
     $cursorBinding = Join-Path $Project '.cursor\agent-workflow-skills\model-routing.jsonc'
     if ((Test-Path $cursorBinding) -and -not (Test-Path $cursorState)) { throw "Cursor model binding exists without bundle ownership. Nothing was installed." }
+    Test-CursorOwnership
     Test-SkillOwnership (Join-Path $env:USERPROFILE '.cursor\skills')
     Test-PolicyArtifactOwnership $cursorState (Join-Path $Project '.cursor\rules\workflow-gate.mdc') (Join-Path $env:USERPROFILE '.cursor\skills') $false
     foreach ($name in @('workflow-gate.mdc', 'model-routing.mdc')) {
