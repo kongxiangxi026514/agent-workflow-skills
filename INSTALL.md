@@ -22,8 +22,8 @@
 
 | 平台 | 脚本 | 参数 |
 | --- | --- | --- |
-| Windows / PowerShell | `install.ps1` / `uninstall.ps1` | `-Tool ...`;Cursor/all 必须给 `-Project`;OpenCode config 可用 `-OpenCodeConfigDir` 覆盖 |
-| macOS / Linux / bash | `install.sh` / `uninstall.sh` | `--tool ...`;Cursor/all 必须给 `--project`;OpenCode config 可用 `--opencode-config-dir` 覆盖 |
+| Windows / PowerShell | `install.ps1` / `uninstall.ps1` | `-Tool ...`;Cursor/all 必须给 `-Project`;OpenCode config 可用 `-OpenCodeConfigDir` 覆盖；仅显式 `-RemoveGlobalSkills` 删除共享 Cursor skills |
+| macOS / Linux / bash | `install.sh` / `uninstall.sh` | `--tool ...`;Cursor/all 必须给 `--project`;OpenCode config 可用 `--opencode-config-dir` 覆盖；仅显式 `--remove-global-skills` 删除共享 Cursor skills |
 
 脚本以自身所在目录为 REPO_ROOT,可从任意工作目录调用。
 
@@ -120,7 +120,7 @@ Cursor 与 OpenCode binding 完全独立。`all` 安装必须分别提供 `Curso
 ./uninstall.sh --tool all --project /path/to/your-repo
 ```
 
-- 只删除 ownership state/marker 证明属于本包的 skill/agent/rule/binding;同名用户文件保留。
+- 默认只删除当前项目的 Cursor rule、binding、resolver 与 state，保留跨项目共享的 `~/.cursor/skills`。只有 `-RemoveGlobalSkills` / `--remove-global-skills` 才会在生成内容与 marker 校验通过后删除 bundle global skills；漂移或伪造 marker 会 fail-loud 且不删除。
 - 移除 `AGENTS.md` / `CLAUDE.md` 里的脊柱标记块,保留文件其余内容。
 - 只删除 audit 证明仍由本包管理的 OpenCode `agent.build/reason/review` 字段；字段漂移时保留用户改动，且绝不恢复 Markdown `model:` 硬编码。迁移 backup 保留在机器本地，供人工审计或回滚检查。
 - `-Project` 给定时删掉 `<repo>\.cursor\rules\workflow-gate.mdc`。

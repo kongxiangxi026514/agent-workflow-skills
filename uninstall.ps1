@@ -18,7 +18,8 @@ param(
     [ValidateSet('cursor', 'opencode', 'claude', 'all')]
     [string]$Tool = 'cursor',
     [string]$Project,
-    [string]$OpenCodeConfigDir
+    [string]$OpenCodeConfigDir,
+    [switch]$RemoveGlobalSkills
 )
 
 $ErrorActionPreference = 'Stop'
@@ -159,8 +160,13 @@ function Uninstall-Cursor {
     $state = if ($Project) { Join-Path $Project '.cursor\agent-workflow-skills\install-state.json' } else { $null }
     $owned = $state -and (Test-Path $state)
     Test-CursorOwnership
-    Remove-Skills $skillsDir
-    $summary.Add("cursor: removed bundle skills from $skillsDir")
+    if ($RemoveGlobalSkills) {
+        Remove-Skills $skillsDir
+        $summary.Add("cursor: removed verified global bundle skills from $skillsDir")
+    }
+    else {
+        $summary.Add("cursor: preserved shared global skills at $skillsDir")
+    }
     if ($Project) {
         $dest = Join-Path $Project '.cursor\rules\workflow-gate.mdc'
         foreach ($name in @('workflow-gate.mdc', 'model-routing.mdc')) {

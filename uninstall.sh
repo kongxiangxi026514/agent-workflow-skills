@@ -3,13 +3,14 @@
 # Reverse of install.sh. Idempotent: no error if items are already absent.
 #
 # Usage:
-#   ./uninstall.sh [--tool cursor|opencode|claude|all] [--project <path>]
+#   ./uninstall.sh [--tool cursor|opencode|claude|all] [--project <path>] [--remove-global-skills]
 # Default tool is cursor.
 set -euo pipefail
 
 TOOL="cursor"
 PROJECT=""
 OPENCODE_CONFIG_DIR=""
+REMOVE_GLOBAL_SKILLS=0
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -19,6 +20,7 @@ while [ $# -gt 0 ]; do
     --project=*) PROJECT="${1#*=}"; shift ;;
     --opencode-config-dir) OPENCODE_CONFIG_DIR="${2:-}"; shift 2 ;;
     --opencode-config-dir=*) OPENCODE_CONFIG_DIR="${1#*=}"; shift ;;
+    --remove-global-skills) REMOVE_GLOBAL_SKILLS=1; shift ;;
     -h|--help)
       grep '^#' "$0" | sed 's/^# \{0,1\}//'
       exit 0 ;;
@@ -130,8 +132,12 @@ uninstall_cursor() {
   state="${PROJECT:+$PROJECT/.cursor/agent-workflow-skills/install-state.json}"
   owned=0; [ -z "$state" ] || [ ! -f "$state" ] || owned=1
   verify_cursor_ownership
-  remove_skills "$skills_dir"
-  SUMMARY+=("cursor: removed bundle skills from $skills_dir")
+  if [ "$REMOVE_GLOBAL_SKILLS" = 1 ]; then
+    remove_skills "$skills_dir"
+    SUMMARY+=("cursor: removed verified global bundle skills from $skills_dir")
+  else
+    SUMMARY+=("cursor: preserved shared global skills at $skills_dir")
+  fi
   if [ -n "$PROJECT" ]; then
     dest="$PROJECT/.cursor/rules/workflow-gate.mdc"
     for rule in "$dest" "$PROJECT/.cursor/rules/model-routing.mdc"; do

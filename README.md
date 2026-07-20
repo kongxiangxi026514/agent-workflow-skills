@@ -172,6 +172,8 @@ git pull --ff-only origin main
 
 使用 `-Tool all` / `--tool all` 时，仍须为 Cursor 提供项目路径。卸载会删除 bundle-owned binding；若要在另一版本中复用它，先在安全的机器本地位置备份，且不要提交该副本。
 
+Cursor 的 `~/.cursor/skills` 在多个项目间共享，因此项目卸载默认保留它们。确认不再被任何项目使用时，才显式传 `-RemoveGlobalSkills`（PowerShell）或 `--remove-global-skills`（bash）；脚本会先验证 marker 与生成内容，验证失败不会删除任何 global skill。
+
 ### 回滚
 
 回滚先改变**干净的 source checkout**，再用该版本的文档重跑安装器：
