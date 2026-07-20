@@ -5,7 +5,11 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
+import stat
 from pathlib import Path
+
+from dispatch_resolver import DispatchResolutionError, _load_binding
 
 
 def _hash(path: Path) -> str:
@@ -14,6 +18,7 @@ def _hash(path: Path) -> str:
 
 MARKER = ".agent-workflow-skills-owned"
 MARKER_BYTES = b"agent-workflow-skills\n"
+EDITABLE_BINDING = "model-routing.jsonc"
 
 
 def _project_path_for(relative: str, rules: Path, bundle: Path) -> Path:
@@ -48,6 +53,26 @@ def verify_global_skills(skills: Path, source_skills: Path) -> None:
                 raise ValueError(f"Cursor skill content drift: {actual_files[relative]}")
 
 
+def _verify_editable_binding(path: Path) -> None:
+    """Allow a user-edited Cursor binding only when it remains safe and valid."""
+    try:
+        metadata = os.lstat(path)
+    except OSError as error:
+        raise ValueError(f"missing Cursor model binding: {path}") from error
+    attributes = getattr(metadata, "st_file_attributes", 0)
+    reparse = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+    if (
+        not stat.S_ISREG(metadata.st_mode)
+        or stat.S_ISLNK(metadata.st_mode)
+        or attributes & reparse
+    ):
+        raise ValueError(f"Cursor model binding must be a regular non-reparse file: {path}")
+    try:
+        _load_binding("cursor", path)
+    except DispatchResolutionError as error:
+        raise ValueError(f"invalid Cursor model binding: {error}") from error
+
+
 def verify_project(state_path: Path, rules: Path, bundle: Path) -> None:
     """Validate artifacts owned only by one Cursor project install state."""
     state = json.loads(state_path.read_text(encoding="utf-8"))
@@ -56,9 +81,14 @@ def verify_project(state_path: Path, rules: Path, bundle: Path) -> None:
     owned = state.get("owned_sha256")
     if not isinstance(owned, dict) or not owned:
         raise ValueError(f"missing Cursor ownership hashes: {state_path}")
+    if EDITABLE_BINDING not in owned:
+        raise ValueError(f"missing Cursor model binding ownership entry: {state_path}")
+    _verify_editable_binding(bundle / EDITABLE_BINDING)
     for relative, expected in owned.items():
         if not isinstance(relative, str) or not isinstance(expected, str):
             raise ValueError(f"invalid Cursor ownership entry: {state_path}")
+        if relative == EDITABLE_BINDING:
+            continue
         if relative.startswith("skills/"):
             continue
         path = _project_path_for(relative, rules, bundle)

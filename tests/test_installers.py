@@ -1,4 +1,4 @@
-import hashlib, json, os, shutil, subprocess, tempfile, unittest
+import hashlib, json, os, shutil, subprocess, sys, tempfile, unittest
 from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SKILLS = (
@@ -312,6 +312,141 @@ class InstallerTests(unittest.TestCase):
         self.assertEqual(state_b.read_bytes(), project_b_before)
         self.assertEqual(binding_b.read_bytes(), binding_b_before)
         self.assertEqual(skill.read_text(encoding="utf-8"), "tampered global skill\n")
+
+    def test_cursor_binding_edit_refreshes_state_without_touching_shared_skills(self):
+        project_b = Path(self.temp.name) / "项目-b"
+        project_b.mkdir()
+        args_a = ("-Project", str(self.project), *CURSOR_MODELS)
+        args_b = ("-Project", str(project_b), *CURSOR_MODELS)
+        self.assertEqual(self.invoke("install.ps1", "cursor", *args_a).returncode, 0)
+        self.assertEqual(self.invoke("install.ps1", "cursor", *args_b).returncode, 0)
+        binding_a = self.project / ".cursor" / "agent-workflow-skills" / "model-routing.jsonc"
+        state_a = self.project / ".cursor" / "agent-workflow-skills" / "install-state.json"
+        binding_b = project_b / ".cursor" / "agent-workflow-skills" / "model-routing.jsonc"
+        state_b = project_b / ".cursor" / "agent-workflow-skills" / "install-state.json"
+        skill = self.home / ".cursor" / "skills" / "code-review" / "SKILL.md"
+        binding_a_before = binding_a.read_bytes()
+        state_a_before = state_a.read_bytes()
+        state_b_before = state_b.read_bytes()
+        skill_before = skill.read_bytes()
+
+        binding_b.write_text(
+            json.dumps(
+                {
+                    "build": "composer-2.5-fast",
+                    "reason": "cursor-grok-4.5-high-fast",
+                    "review": "glm-5.2-high",
+                    "families": {
+                        "build": "composer-2.5",
+                        "reason": "cursor-grok-4.5",
+                        "review": "glm-5.2",
+                    },
+                }
+            ) + "\n",
+            encoding="utf-8",
+        )
+        self.assertEqual(self.invoke("install.ps1", "cursor", *args_b).returncode, 0)
+
+        binding = json.loads(binding_b.read_text(encoding="utf-8").split("\n", 1)[1])
+        state = json.loads(state_b.read_text(encoding="utf-8"))
+        self.assertEqual(binding["build"], "composer-2.5-fast")
+        self.assertEqual(binding["families"]["reason"], "cursor-grok-4.5")
+        self.assertEqual(
+            state["owned_sha256"]["model-routing.jsonc"],
+            hashlib.sha256(binding_b.read_bytes()).hexdigest(),
+        )
+        self.assertNotEqual(state_b.read_bytes(), state_b_before)
+        self.assertEqual(binding_a.read_bytes(), binding_a_before)
+        self.assertEqual(state_a.read_bytes(), state_a_before)
+        self.assertEqual(skill.read_bytes(), skill_before)
+
+    def test_invalid_cursor_binding_fails_before_any_write(self):
+        args = ("-Project", str(self.project), *CURSOR_MODELS)
+        self.assertEqual(self.invoke("install.ps1", "cursor", *args).returncode, 0)
+        bundle = self.project / ".cursor" / "agent-workflow-skills"
+        binding = bundle / "model-routing.jsonc"
+        state = bundle / "install-state.json"
+        rule = self.project / ".cursor" / "rules" / "workflow-gate.mdc"
+        skill = self.home / ".cursor" / "skills" / "code-review" / "SKILL.md"
+        binding.write_text(
+            '{"build":"composer-2.5-fast","reason":null,"review":"glm-5.2-high",'
+            '"families":{"build":"composer-2.5","reason":null,"review":"bad family!"}}\n',
+            encoding="utf-8",
+        )
+        binding_before = binding.read_bytes()
+        state_before = state.read_bytes()
+        rule_before = rule.read_bytes()
+        skill_before = skill.read_bytes()
+
+        result = self.invoke("install.ps1", "cursor", *args)
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(binding.read_bytes(), binding_before)
+        self.assertEqual(state.read_bytes(), state_before)
+        self.assertEqual(rule.read_bytes(), rule_before)
+        self.assertEqual(skill.read_bytes(), skill_before)
+
+    def test_cursor_binding_reparse_fails_ownership_preflight(self):
+        args = ("-Project", str(self.project), *CURSOR_MODELS)
+        self.assertEqual(self.invoke("install.ps1", "cursor", *args).returncode, 0)
+        bundle = self.project / ".cursor" / "agent-workflow-skills"
+        binding = bundle / "model-routing.jsonc"
+        state = bundle / "install-state.json"
+        rule = self.project / ".cursor" / "rules" / "workflow-gate.mdc"
+        skill = self.home / ".cursor" / "skills" / "code-review" / "SKILL.md"
+        external = Path(self.temp.name) / "external-binding.jsonc"
+        external.write_bytes(binding.read_bytes())
+        binding.unlink()
+        try:
+            binding.symlink_to(external)
+        except OSError as error:
+            self.skipTest(f"symlink creation unavailable: {error}")
+        state_before = state.read_bytes()
+        rule_before = rule.read_bytes()
+        skill_before = skill.read_bytes()
+
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(ROOT / "tools" / "verify_cursor_ownership.py"),
+                "--state",
+                str(state),
+                "--rules",
+                str(rule.parent),
+                "--skills",
+                str(self.home / ".cursor" / "skills"),
+                "--bundle",
+                str(bundle),
+            ],
+            cwd=ROOT,
+            capture_output=True,
+            check=False,
+        )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(b"regular non-reparse", result.stdout + result.stderr)
+        self.assertEqual(state.read_bytes(), state_before)
+        self.assertEqual(rule.read_bytes(), rule_before)
+        self.assertEqual(skill.read_bytes(), skill_before)
+
+    def test_cursor_uninstall_allows_a_valid_edited_binding(self):
+        args = ("-Project", str(self.project), *CURSOR_MODELS)
+        self.assertEqual(self.invoke("install.ps1", "cursor", *args).returncode, 0)
+        bundle = self.project / ".cursor" / "agent-workflow-skills"
+        binding = bundle / "model-routing.jsonc"
+        binding.write_text(
+            '{"build":"composer-2.5-fast","reason":null,"review":"glm-5.2-high",'
+            '"families":{"build":"composer-2.5","reason":null,"review":"glm-5.2"}}\n',
+            encoding="utf-8",
+        )
+
+        result = self.invoke("uninstall.ps1", "cursor", "-Project", str(self.project))
+
+        self.assertEqual(result.returncode, 0, result.stderr.decode("utf-8", "replace"))
+        self.assertFalse(binding.exists())
+        self.assertFalse((bundle / "install-state.json").exists())
+        self.assertFalse((self.project / ".cursor" / "rules" / "workflow-gate.mdc").exists())
+        self.assertTrue((self.home / ".cursor" / "skills" / "code-review" / "SKILL.md").is_file())
 
     def test_cursor_uninstall_preserves_shared_skills_until_explicit_removal(self):
         project_b = Path(self.temp.name) / "项目-b"
