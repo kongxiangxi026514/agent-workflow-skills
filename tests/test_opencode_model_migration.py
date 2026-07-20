@@ -200,6 +200,21 @@ class OpenCodeModelMigrationTests(unittest.TestCase):
         self.assertNotIn("model", cleaned["agent"]["review"])
         self.assertEqual(cleaned["agent"]["review"]["permission"], {"edit": "deny"})
 
+    def test_uninstall_rejects_role_model_drift_without_mutation(self):
+        config = self.base / "opencode.json"
+        config.write_text("{}\n", encoding="utf-8")
+        self.assertEqual(self.invoke().returncode, 0)
+        drifted = parse_jsonc(config)
+        drifted["agent"]["build"]["model"] = "sample/user-replacement"
+        config.write_text(json.dumps(drifted), encoding="utf-8")
+        before = config.read_bytes()
+        audit_before = self.audit.read_bytes()
+        result = self.invoke("--uninstall")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(b"drift", result.stderr.lower())
+        self.assertEqual(config.read_bytes(), before)
+        self.assertEqual(self.audit.read_bytes(), audit_before)
+
     def test_reparse_config_path_is_rejected_without_creating_audit(self):
         target = self.base / "target.jsonc"
         target.write_text("{}\n", encoding="utf-8")
@@ -354,6 +369,22 @@ class OpenCodeModelMigrationTests(unittest.TestCase):
         self.assertIn(b"yaml", result.stderr.lower())
         self.assertEqual(config.read_bytes(), before)
         self.assertIn("model: |", helper.read_text(encoding="utf-8"))
+
+        self.temp.cleanup()
+        self.setUp()
+        config = self.base / "opencode.jsonc"
+        config.write_bytes(before)
+        helper = self.base / "agents" / "github-helper.md"
+        helper.parent.mkdir()
+        helper.write_text(
+            "---\ndescription: [unterminated\nmodel: sample/helper\n---\n",
+            encoding="utf-8",
+        )
+        result = self.invoke()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(b"yaml", result.stderr.lower())
+        self.assertEqual(config.read_bytes(), before)
+        self.assertIn("model: sample/helper", helper.read_text(encoding="utf-8"))
 
         self.temp.cleanup()
         self.setUp()

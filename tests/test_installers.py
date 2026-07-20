@@ -223,6 +223,42 @@ class InstallerTests(unittest.TestCase):
         self.assertNotEqual(self.invoke("install.ps1", "cursor").returncode, 0)
         self.assertFalse((self.home / ".cursor").exists())
 
+    def test_forged_cursor_markers_fail_before_install_or_uninstall_mutation(self):
+        skill = self.home / ".cursor" / "skills" / "code-review" / "SKILL.md"
+        skill.parent.mkdir(parents=True)
+        skill.write_text("forged skill\n", encoding="utf-8")
+        (skill.parent / ".agent-workflow-skills-owned").write_text(
+            "agent-workflow-skills\n", encoding="utf-8"
+        )
+        rule = self.project / ".cursor" / "rules" / "workflow-gate.mdc"
+        rule.parent.mkdir(parents=True)
+        rule.write_text("<!-- Managed by agent-workflow-skills. -->\nforged rule\n", encoding="utf-8")
+        skill_before, rule_before = skill.read_bytes(), rule.read_bytes()
+        result = self.invoke("install.ps1", "cursor", "-Project", str(self.project), *CURSOR_MODELS)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(b"valid install", result.stderr.lower())
+        self.assertEqual(skill.read_bytes(), skill_before)
+        self.assertEqual(rule.read_bytes(), rule_before)
+        self.assertFalse((self.project / ".cursor" / "agent-workflow-skills").exists())
+        result = self.invoke("uninstall.ps1", "cursor", "-Project", str(self.project))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(skill.read_bytes(), skill_before)
+        self.assertEqual(rule.read_bytes(), rule_before)
+
+        self.temp.cleanup()
+        self.setUp()
+        skill = self.home / ".cursor" / "skills" / "code-review" / "SKILL.md"
+        skill.parent.mkdir(parents=True)
+        skill.write_text("forged skill only\n", encoding="utf-8")
+        (skill.parent / ".agent-workflow-skills-owned").write_text(
+            "agent-workflow-skills\n", encoding="utf-8"
+        )
+        before = skill.read_bytes()
+        result = self.invoke("install.ps1", "cursor", "-Project", str(self.project), *CURSOR_MODELS)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(skill.read_bytes(), before)
+        self.assertFalse((self.project / ".cursor").exists())
+
     def test_all_uses_isolated_platform_bindings_and_installs_resolver(self):
         result = self.invoke(
             "install.ps1", "all", "-Project", str(self.project), *MIGRATE, *PLATFORM_MODELS
@@ -354,7 +390,7 @@ class InstallerTests(unittest.TestCase):
         before = rule.read_bytes()
         result = self.invoke("install.ps1", "cursor", *args)
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn(b"drift", result.stderr.lower())
+        self.assertIn(b"ownership", result.stderr.lower())
         self.assertEqual(rule.read_bytes(), before)
 
     def test_opencode_models_are_required_before_mutation(self):
@@ -421,6 +457,31 @@ class InstallerTests(unittest.TestCase):
         result = self.invoke("uninstall.ps1", "opencode")
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(agents.read_bytes(), before)
+
+    def test_tampered_spine_uninstall_preserves_opencode_state(self):
+        config, _ = self.config("opencode.jsonc", '{"user":"keep"}\n')
+        self.assertEqual(
+            self.invoke("install.ps1", "opencode", *MIGRATE, *MODELS).returncode, 0
+        )
+        agents = self.opencode / "AGENTS.md"
+        agents.write_text(
+            agents.read_text(encoding="utf-8").replace(
+                "<!-- END agent-workflow-skills spine -->",
+                "tampered\n<!-- END agent-workflow-skills spine -->",
+            ),
+            encoding="utf-8",
+        )
+        config_before = config.read_bytes()
+        state = self.opencode / "agent-workflow-skills" / "install-state.json"
+        state_before = state.read_bytes()
+        agents_before = agents.read_bytes()
+        result = self.invoke("uninstall.ps1", "opencode")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(b"provenance", result.stderr.lower())
+        self.assertEqual(config.read_bytes(), config_before)
+        self.assertEqual(state.read_bytes(), state_before)
+        self.assertEqual(agents.read_bytes(), agents_before)
+        self.assertTrue((self.opencode / "skills" / "code-review" / "SKILL.md").is_file())
 
     def test_unowned_skill_refuses_without_creating_binding(self):
         skill = self.opencode / "skills/code-review/SKILL.md"
@@ -591,6 +652,21 @@ cmp "$config/opencode.jsonc" "$root/before"; test ! -e "$project/.cursor"; test 
 if env -i HOME="$HOME" PATH=/usr/local/bin:/usr/bin:/bin AGENT_WORKFLOW_TEST_FAIL_PLATFORM=claude \
   bash "$repo/install.sh" "${common[@]}"; then exit 1; fi
 cmp "$config/opencode.jsonc" "$root/before"; test ! -e "$project/.cursor"; test ! -e "$HOME/.cursor"; test ! -e "$HOME/.claude"
+''')
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+
+    def test_bash_tampered_spine_uninstall_is_atomic(self):
+        result = self.run_bash(r'''
+set -euo pipefail
+repo="$1"; root="$(mktemp -d)"; trap 'rm -rf "$root"' EXIT; export HOME="$root/home"
+cfg="$root/opencode"; mkdir -p "$cfg"; printf '%s\n' '{"user":"keep"}' > "$cfg/opencode.jsonc"
+run() { env -i HOME="$HOME" PATH=/usr/local/bin:/usr/bin:/bin bash "$@"; }
+run "$repo/install.sh" --tool opencode --opencode-config-dir "$cfg" --migrate-opencode-model-config --build-model acme/terra --review-model other/glm
+sed -i '/END agent-workflow-skills spine/i tampered' "$cfg/AGENTS.md"
+cp "$cfg/opencode.jsonc" "$root/config.before"; cp "$cfg/agent-workflow-skills/install-state.json" "$root/state.before"; cp "$cfg/AGENTS.md" "$root/agents.before"
+if run "$repo/uninstall.sh" --tool opencode --opencode-config-dir "$cfg"; then exit 1; fi
+cmp "$cfg/opencode.jsonc" "$root/config.before"; cmp "$cfg/agent-workflow-skills/install-state.json" "$root/state.before"; cmp "$cfg/AGENTS.md" "$root/agents.before"
+test -f "$cfg/skills/code-review/SKILL.md"
 ''')
         self.assertEqual(result.returncode, 0, result.stderr.decode())
 
