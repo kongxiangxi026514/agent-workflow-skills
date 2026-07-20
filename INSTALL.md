@@ -33,6 +33,8 @@
 
 Cursor binding 位于 `<project>/.cursor/agent-workflow-skills/model-routing.jsonc`（Windows 使用等价的反斜杠路径）。这是机器本地配置，勿提交；需要忽略时使用该 checkout 的 `.git/info/exclude`，不要为了安装器改写共享的用户配置。
 
+Cursor 全局 skills 是跨项目共享资产：安装器只按 `policy-v3/generated/skills/` 的稳定内容与 ownership marker 校验它们，不会要求下一个项目复用前一个项目的 `install-state.json`。项目 rule、binding 与 resolver 只由各自项目的 state 校验；全局 skill 内容或 marker 漂移会在任何写入前 fail-loud。
+
 ## Cursor 安装(逐步)
 
 1. 装 6 个按需 skill(全局)并把强制脊柱写进某个项目:

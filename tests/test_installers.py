@@ -236,7 +236,7 @@ class InstallerTests(unittest.TestCase):
         skill_before, rule_before = skill.read_bytes(), rule.read_bytes()
         result = self.invoke("install.ps1", "cursor", "-Project", str(self.project), *CURSOR_MODELS)
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn(b"valid install", result.stderr.lower())
+        self.assertIn(b"global skill ownership", result.stderr.lower())
         self.assertEqual(skill.read_bytes(), skill_before)
         self.assertEqual(rule.read_bytes(), rule_before)
         self.assertFalse((self.project / ".cursor" / "agent-workflow-skills").exists())
@@ -258,6 +258,35 @@ class InstallerTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(skill.read_bytes(), before)
         self.assertFalse((self.project / ".cursor").exists())
+
+    def test_cursor_global_skills_support_independent_projects_and_reject_drift(self):
+        project_b = Path(self.temp.name) / "项目-b"
+        project_b.mkdir()
+        args_a = ("-Project", str(self.project), *CURSOR_MODELS)
+        args_b = ("-Project", str(project_b), *CURSOR_MODELS)
+        self.assertEqual(self.invoke("install.ps1", "cursor", *args_a).returncode, 0)
+        self.assertEqual(self.invoke("install.ps1", "cursor", *args_b).returncode, 0)
+        skill = self.home / ".cursor" / "skills" / "code-review" / "SKILL.md"
+        self.assertTrue(skill.is_file())
+        state_a = self.project / ".cursor" / "agent-workflow-skills" / "install-state.json"
+        state_b = project_b / ".cursor" / "agent-workflow-skills" / "install-state.json"
+        self.assertTrue(state_a.is_file())
+        self.assertTrue(state_b.is_file())
+        binding_a = self.project / ".cursor" / "agent-workflow-skills" / "model-routing.jsonc"
+        binding_b = project_b / ".cursor" / "agent-workflow-skills" / "model-routing.jsonc"
+        self.assertEqual(binding_a.read_bytes(), binding_b.read_bytes())
+
+        project_a_before = state_a.read_bytes()
+        project_b_before = state_b.read_bytes()
+        binding_b_before = binding_b.read_bytes()
+        skill.write_text("tampered global skill\n", encoding="utf-8")
+        result = self.invoke("install.ps1", "cursor", *args_b)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(b"global skill", result.stderr.lower())
+        self.assertEqual(state_a.read_bytes(), project_a_before)
+        self.assertEqual(state_b.read_bytes(), project_b_before)
+        self.assertEqual(binding_b.read_bytes(), binding_b_before)
+        self.assertEqual(skill.read_text(encoding="utf-8"), "tampered global skill\n")
 
     def test_all_uses_isolated_platform_bindings_and_installs_resolver(self):
         result = self.invoke(
@@ -667,6 +696,22 @@ cp "$cfg/opencode.jsonc" "$root/config.before"; cp "$cfg/agent-workflow-skills/i
 if run "$repo/uninstall.sh" --tool opencode --opencode-config-dir "$cfg"; then exit 1; fi
 cmp "$cfg/opencode.jsonc" "$root/config.before"; cmp "$cfg/agent-workflow-skills/install-state.json" "$root/state.before"; cmp "$cfg/AGENTS.md" "$root/agents.before"
 test -f "$cfg/skills/code-review/SKILL.md"
+''')
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+
+    def test_bash_cursor_skills_are_shared_across_projects(self):
+        result = self.run_bash(r'''
+set -euo pipefail
+repo="$1"; root="$(mktemp -d)"; trap 'rm -rf "$root"' EXIT; export HOME="$root/home"
+run() { env -i HOME="$HOME" PATH=/usr/local/bin:/usr/bin:/bin bash "$@"; }
+a="$root/project-a"; b="$root/project-b"; mkdir -p "$a" "$b"
+run "$repo/install.sh" --tool cursor --project "$a" --build-model gpt-5.6-terra-xhigh --review-model glm-5.2-high
+run "$repo/install.sh" --tool cursor --project "$b" --build-model gpt-5.6-terra-xhigh --review-model glm-5.2-high
+test -f "$HOME/.cursor/skills/code-review/SKILL.md"; test -f "$a/.cursor/agent-workflow-skills/install-state.json"; test -f "$b/.cursor/agent-workflow-skills/install-state.json"
+cp "$a/.cursor/agent-workflow-skills/install-state.json" "$root/a.before"; cp "$b/.cursor/agent-workflow-skills/install-state.json" "$root/b.before"
+printf 'tampered\n' > "$HOME/.cursor/skills/code-review/SKILL.md"
+if run "$repo/install.sh" --tool cursor --project "$b" --build-model gpt-5.6-terra-xhigh --review-model glm-5.2-high; then exit 1; fi
+cmp "$a/.cursor/agent-workflow-skills/install-state.json" "$root/a.before"; cmp "$b/.cursor/agent-workflow-skills/install-state.json" "$root/b.before"
 ''')
         self.assertEqual(result.returncode, 0, result.stderr.decode())
 
