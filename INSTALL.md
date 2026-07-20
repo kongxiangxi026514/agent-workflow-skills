@@ -16,7 +16,7 @@
 | `rules/workflow-gate.mdc` | **强制规则** | 脊柱:每轮 A/B/C/D 门控 + 主/子编排 + 全流程 + 质量/架构契约 + 模型路由 + 元认知检查点 |
 | `policy-v3/generated/skills/` | 6 个按需 skills | `workflow-lifecycle`、`first-principles`、`code-review`、`research-routing`、`parallel-dispatch`、`memory-gate` |
 | `config/model-routing.jsonc` | 模板 | build/reason/review 的无默认 provider binding 格式 |
-| `opencode/agents/{build,reason,review}.md` | 配置 | OpenCode 原生三角色 agent;不写用户主配置 |
+| OpenCode `agent.build/reason/review` | 受管 JSON/JSONC 字段 | 在显式 migration opt-in 后保存角色 model、mode、permission 与 description |
 
 ## 脚本参数
 
@@ -57,8 +57,8 @@ Cursor binding 位于 `<project>/.cursor/agent-workflow-skills/model-routing.jso
 | Cursor(带 Project) | binding + resolver + adapter template | `<project>/.cursor/agent-workflow-skills/{model-routing.jsonc,dispatch_resolver.py}` + `.cursor/rules/model-routing.mdc` |
 | OpenCode | `policy-v3/generated/skills/`（6 个） | `~/.config/opencode/skills/<skill>/` |
 | OpenCode | `rules/workflow-gate.mdc` | `~/.config/opencode/AGENTS.md` 标记块 |
-| OpenCode | `opencode/agents/{build,reason,review}.md` | `~/.config/opencode/agents/{build,reason,review}.md` |
 | OpenCode | binding + resolver + ownership state | `~/.config/opencode/agent-workflow-skills/{model-routing.jsonc,dispatch_resolver.py,install-state.json}` |
+| OpenCode（显式迁移） | 选定 `opencode.json` / `opencode.jsonc` | `agent.{build,reason,review}`；原字节 backup 和 SHA-256 audit 写入 `agent-workflow-skills/` |
 | Claude | `policy-v3/generated/{skills,adapters/claude}` | `~/.claude/skills/<skill>/` + `~/.claude/CLAUDE.md` 标记块 + `~/.claude/agent-workflow-skills/install-state.json` |
 
 脚本自动完成全部复制和注入,无需 agent 或用户再手工移动文件。OpenCode 运行中的会话需在安装后重启。
@@ -67,17 +67,19 @@ Cursor binding 位于 `<project>/.cursor/agent-workflow-skills/model-routing.jso
 
 ```bash
 ./install.sh --tool opencode \
+  --migrate-opencode-model-config \
   --build-model provider/build-id --review-model other/review-id
 # 默认 balanced；需要时显式改为 lean
 ./install.sh --tool opencode --profile lean \
+  --migrate-opencode-model-config \
   --build-model provider/build-id --review-model other/review-id
 ```
 
 - `policy-v3/generated/skills/` → `~/.config/opencode/skills/<skill>/SKILL.md`。
 - 脊柱正文(已剥离 `.mdc` frontmatter)幂等注入 `~/.config/opencode/AGENTS.md`(全局始终加载),用 `<!-- BEGIN agent-workflow-skills spine -->` / `<!-- END agent-workflow-skills spine -->` 标记块包裹。
-- 首次安装用 CLI 明确给 `build` 与 `review`;`reason` 省略即以 JSONC `null` 复用 build。之后编辑 `<config-dir>/agent-workflow-skills/model-routing.jsonc` 并重跑,三个 OpenCode agent 自动刷新;review 保持 `edit: deny`。
-- 默认 config dir 是字面 `~/.config/opencode`;覆盖参数同时适用于 install/uninstall。`opencode.json` 和 `opencode.jsonc` 从不读取或改写,双文件、注释、未知字段、损坏内容均逐字节保留。
-- 安装器只验证 review ID 不等于 build/effective-reason;provider 字符串不同不能证明模型家族不同。全部 UTF-8 无 BOM;先临时 staging/校验再替换目标,失败校验不改变既有 bundle 状态。完成后必须重启 OpenCode。
+- 首次安装用 CLI 明确给 `build` 与 `review`;`reason` 省略即以 JSONC `null` 复用 build。角色配置写入 OpenCode 主配置 `agent` 映射，而不是 bundle Markdown role agent；未命名的 Markdown agent 继承会话模型。之后编辑 `<config-dir>/agent-workflow-skills/model-routing.jsonc` 并带相同 migration flag 重跑，三个角色的 JSON 字段会刷新；review 保持 `edit: deny`。
+- 默认 config dir 是字面 `~/.config/opencode`;覆盖参数同时适用于 install/uninstall。默认不改主配置并 fail-loud；`--migrate-opencode-model-config` / `-MigrateOpenCodeModelConfig` 是唯一 opt-in。`--opencode-model-config` / `-OpenCodeModelConfig` 可选择 `opencode.json` 或 `opencode.jsonc`；未指定时只能使用唯一现存文件，无文件时创建 JSONC，双文件或损坏内容均拒绝且不改写。
+- 迁移保留非模型 JSON 语义，将原字节备份到 `<config-dir>/agent-workflow-skills/migration-backups/`，并在 `opencode-model-migration.json` 记录前后 SHA-256 与 managed role fields。它会移走 `agents/{build,reason,review}.md` 脱离发现目录，并从其余 Markdown agent（例如 `github-helper`）剥离 `model:`。安装器只验证 review ID 不等于 build/effective-reason;provider 字符串不同不能证明模型家族不同。全部 UTF-8 无 BOM;先临时 staging/校验再替换目标,失败校验不改变既有 bundle 状态。完成后必须重启 OpenCode。
 
 ## 模型路由
 
@@ -99,8 +101,8 @@ Cursor 与 OpenCode binding 完全独立。`all` 安装必须分别提供 `Curso
 
 - **ownership**:`install-state.json` 与 marker 标识本包资产;同名非本包 skill/agent/rule 失败且不覆盖,卸载也保留。
 - **AGENTS.md / CLAUDE.md 脊柱注入**:用标记块定位。若标记块已存在则**原地替换**,否则追加;文件不存在则创建。因此重复运行只会保留**一个**脊柱块,不会累积。文件里标记块以外的内容原样保留。
-- **OpenCode agents**:仅更新 state/marker 所有的三角色文件;改 binding 后重跑刷新。
-- **opencode.json / opencode.jsonc**:零读取、零改写、零竞争文件。
+- **OpenCode role map**:仅在明确 migration opt-in 时更新 `agent.build/reason/review`;其它 agent 字段保留。三角色 Markdown 文件移出 discovery，其余 Markdown role 的 `model:` 被剥离以继承会话模型。
+- **opencode.json / opencode.jsonc**:默认零读取、零改写；迁移模式只选择一个安全路径，拒绝双文件、损坏 JSONC 或 reparse/symlink 路径，并留下逐字节 backup 与 SHA audit。
 
 ## 卸载 / 热插拔
 
@@ -118,15 +120,15 @@ Cursor 与 OpenCode binding 完全独立。`all` 安装必须分别提供 `Curso
 
 - 只删除 ownership state/marker 证明属于本包的 skill/agent/rule/binding;同名用户文件保留。
 - 移除 `AGENTS.md` / `CLAUDE.md` 里的脊柱标记块,保留文件其余内容。
-- 只删除带 ownership marker 的 OpenCode `agents/build.md` / `agents/reason.md` / `agents/review.md`,不删同名用户文件。
+- 只删除 audit 证明仍由本包管理的 OpenCode `agent.build/reason/review` 字段；字段漂移时保留用户改动，且绝不恢复 Markdown `model:` 硬编码。
 - `-Project` 给定时删掉 `<repo>\.cursor\rules\workflow-gate.mdc`。
-- `opencode.json` / `opencode.jsonc` **不会被修改或删除**。
+- OpenCode 主配置不会被删除；仅在显式 migration 后由 uninstall 删除校验通过的受管角色字段。
 - 已不存在的项直接跳过,不报错。
 
 ## 从 installer-v2 迁移
 
 1. 不要复制/合并旧 AGENTS、rule 或 skill，也不要删除现有 `model-routing.jsonc` / ownership state。
-2. 使用含 `policy-v3/generated/` 的版本直接重跑 install；bundle-owned v2 资产会在 staging 校验后替换为 v3，OpenCode 主配置仍逐字节不变。
+2. 使用含 `policy-v3/generated/` 的版本，并显式传 `-MigrateOpenCodeModelConfig` / `--migrate-opencode-model-config`；先审阅自动选择的主配置，必要时用 `OpenCodeModelConfig` / `--opencode-model-config` 指定。migration audit 和 byte backup 是回滚检查证据，不要删除它们绕过冲突。
 3. 记录默认 profile（Cursor `lean`、OpenCode `balanced`）；若需要统一行为，显式传 `Profile`，然后重启 OpenCode。
 4. 若 drift 检查报错，先审阅受管生成物是否被手改；要回到受支持状态时运行对应 uninstall 后重装，禁止通过删除 state/marker 绕过检查。
 
@@ -136,4 +138,4 @@ Cursor 与 OpenCode binding 完全独立。`all` 安装必须分别提供 `Curso
 - 按需 skill:新开一轮发「按 `code-review` 走,分层审查这段 diff」,应复述 7 层审查 + no-false-negative 复验。
 - 模型路由:应复述 build/reason/review 职责及本机/项目 binding。
 
-仓库回归测试使用临时中文路径作为 `HOME` / `USERPROFILE`,覆盖 binding 刷新/null fallback、主配置字节不变、ownership 冲突、rollback-safe validation、UTF-8、重复安装/卸载及 config-dir override,不会访问真实用户目录。
+仓库回归测试使用临时中文路径作为 `HOME` / `USERPROFILE`,覆盖 config 选择、JSONC 注释语义/byte backup/SHA audit、binding 刷新/null fallback、markdown sanitization、reparse 路径拒绝、failure injection rollback、drift/uninstall、UTF-8、重复安装/卸载及 config-dir override,不会访问真实用户目录。

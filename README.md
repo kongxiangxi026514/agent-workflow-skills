@@ -31,7 +31,7 @@
 - **R1**：普通实现或多文件工作；加载 `P01`，执行针对性测试并检查 diff。
 - **R2**：安全、持久化 schema、几何/坐标、训练或 ground-truth 语义、生产部署和破坏性操作；加载 `P01` 与 `P04`，并要求独立审查。
 
-`build` 负责实现、重构和常规调试；`reason` 仅用于非显然权衡或未知根因；`review` 用于独立验证。安装后的 JSONC binding 可编辑：修改本机 binding 后重跑同一安装命令，即会重新渲染受管产物。`reason: null` 会复用 `build`；`review` ID 必须不同于 `build` 和有效 `reason`。安装器只验证 ID 不等性，不能从 provider 字符串推断模型家族独立性。
+`build` 负责实现、重构和常规调试；`reason` 仅用于非显然权衡或未知根因；`review` 用于独立验证。安装后的 JSONC binding 可编辑：修改本机 binding 后重跑同一安装命令，即会刷新受管产物。`reason: null` 会复用 `build`；`review` ID 必须不同于 `build` 和有效 `reason`。安装器只验证 ID 不等性，不能从 provider 字符串推断模型家族独立性。
 
 ### Profiles
 
@@ -90,19 +90,21 @@ Cursor 的 L0 adapter、规则和 binding 都写入传入的 `-Project` / `--pro
 
 ### OpenCode：机器级安装
 
-OpenCode 默认使用 `$HOME/.config/opencode`；可用 `-OpenCodeConfigDir` / `--opencode-config-dir` 指向另一个目录。它安装 generated skills、带标记的 `AGENTS.md` spine、三个 native agent 和本机 binding；完成后重启 OpenCode。
+OpenCode 默认使用 `$HOME/.config/opencode`；可用 `-OpenCodeConfigDir` / `--opencode-config-dir` 指向另一个目录。它安装 generated skills、带标记的 `AGENTS.md` spine 和本机 binding，并且只在明确授权时将三角色写入一个 OpenCode JSON/JSONC `agent` 映射；完成后重启 OpenCode。
 
 ```powershell
 .\install.ps1 -Tool opencode -OpenCodeConfigDir "$HOME\.config\opencode" `
+  -MigrateOpenCodeModelConfig `
   -BuildModel sample/build-v1 -ReviewModel sample/review-v1
 ```
 
 ```bash
 ./install.sh --tool opencode --opencode-config-dir "$HOME/.config/opencode" \
+  --migrate-opencode-model-config \
   --build-model sample/build-v1 --review-model sample/review-v1
 ```
 
-OpenCode binding 位于 `<config-dir>/agent-workflow-skills/model-routing.jsonc`。安装器不读取、创建或修改 `opencode.json` / `opencode.jsonc`，即使两者同时存在或内容损坏。
+OpenCode binding 位于 `<config-dir>/agent-workflow-skills/model-routing.jsonc`。为保护已有配置，默认安装会 fail-loud；只有带迁移 opt-in 才读取并修改一个选定的 `opencode.json` / `opencode.jsonc`。`-OpenCodeModelConfig` / `--opencode-model-config` 可显式选择其一；否则仅在恰好一个存在时自动选择，都不存在时新建 `opencode.jsonc`，两个同时存在时拒绝。迁移会在 `<config-dir>/agent-workflow-skills/migration-backups/` 逐字节备份原文件，并记录 SHA-256 audit。
 
 ### Claude：机器级安装
 
@@ -124,17 +126,19 @@ Claude 不接受本项目的模型参数；它安装 generated skills、`CLAUDE.
 
 ```powershell
 .\install.ps1 -Tool all -Project "D:\src\my-project" `
+  -MigrateOpenCodeModelConfig `
   -CursorBuildModel sample-build-v1 -CursorReviewModel sample-review-v1 `
   -OpenCodeBuildModel sample/build-v1 -OpenCodeReviewModel sample/review-v1
 ```
 
 ```bash
 ./install.sh --tool all --project "/work/my-project" \
+  --migrate-opencode-model-config \
   --cursor-build-model sample-build-v1 --cursor-review-model sample-review-v1 \
   --opencode-build-model sample/build-v1 --opencode-review-model sample/review-v1
 ```
 
-可选的 `reason` 参数为 `-ReasonModel` / `--reason-model`，或 `all` 的对应平台专用形式。安装后可直接编辑本机 binding，再重跑同一 host 的安装命令；不要将它提交到 source checkout 或目标项目。
+可选的 `reason` 参数为 `-ReasonModel` / `--reason-model`，或 `all` 的对应平台专用形式。安装后可直接编辑本机 binding，再用相同的 OpenCode migration flag 重跑对应 host；不要将 binding、迁移备份或 audit 提交到 source checkout 或目标项目。
 
 ## 升级、卸载与回滚
 
@@ -152,7 +156,7 @@ git pull --ff-only origin main
 
 ### 卸载
 
-卸载只移除 ownership state 或 marker 证明属于本项目的文件；同名用户 skills/agents/rules 和 OpenCode 主配置保持不变。
+卸载只移除 ownership state 或 marker 证明属于本项目的文件；OpenCode 仅删除 audit 中仍与受管值一致的 `agent.build/reason/review` 字段，绝不恢复或写回旧的 Markdown `model:` 硬编码。
 
 ```powershell
 .\uninstall.ps1 -Tool cursor -Project "D:\src\my-project"
@@ -195,7 +199,7 @@ python3 tools/audit_context_budget.py --json
 python3 -m unittest discover -s tests -v
 ```
 
-安装后，Cursor 检查 `<project>/.cursor/rules/workflow-gate.mdc` 是否存在且带 `alwaysApply: true`；OpenCode 检查 `<config-dir>/skills`、`agents` 和 `AGENTS.md` 标记块后重启；Claude 检查 `~/.claude/skills`、`CLAUDE.md` 标记块和 `agent-workflow-skills/install-state.json`。这些是文件安装检查，不是任何主机或模型实际行为的保证。
+安装后，Cursor 检查 `<project>/.cursor/rules/workflow-gate.mdc` 是否存在且带 `alwaysApply: true`；OpenCode 检查 `<config-dir>/skills`、`AGENTS.md` 标记块、选定配置里的 `agent.build/reason/review` 和 migration audit 后重启；Claude 检查 `~/.claude/skills`、`CLAUDE.md` 标记块和 `agent-workflow-skills/install-state.json`。这些是文件安装检查，不是任何主机或模型实际行为的保证。
 
 常见问题：
 
@@ -203,6 +207,7 @@ python3 -m unittest discover -s tests -v
 - **Cursor 提示缺少项目路径**：`cursor` 和 `all` 必须给 `-Project` / `--project`，因为 L0 规则按 checkout 写入。
 - **generated policy drift**：不要手改 generated adapter 或 skill；审阅改动后运行对应卸载，再从 source checkout 重装。
 - **ownership 冲突**：安装器拒绝覆盖不属于 bundle 的同名文件。选择另一个配置目录，或人工决定如何迁移，切勿删除 marker 绕过检查。
+- **OpenCode 迁移被拒绝**：显式传 migration flag；检查仅有一个 `opencode.json` / `opencode.jsonc`，或用 `--opencode-model-config` 选择目标。不要删除 backup/audit 绕过冲突。
 - **OpenCode 未加载新内容**：重启 OpenCode。MCP 未配置不会阻塞本项目安装。
 
 ## 隐私、安全与平台边界
