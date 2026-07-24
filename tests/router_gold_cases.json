@@ -117,5 +117,54 @@
     "paths": ["src/helper.py"],
     "expected_risk": "R2",
     "expected_policies": ["P01", "P04"]
+  },
+  {
+    "id": "chinese-official-docs",
+    "text": "请查询最新官方文档并核对第三方 API。",
+    "paths": [],
+    "expected_risk": "R1",
+    "expected_policies": ["P01", "P02"]
+  },
+  {
+    "id": "chinese-persistent-memory",
+    "text": "把这段经验更新到 AGENTS.md 作为长期记忆。",
+    "paths": ["AGENTS.md"],
+    "expected_risk": "R2",
+    "expected_policies": ["P03"]
+  },
+  {
+    "id": "chinese-code-review",
+    "text": "审查这个代码差异并给出阻断问题。",
+    "paths": ["src/router.py"],
+    "expected_risk": "R1",
+    "expected_policies": ["P01", "P04"]
+  },
+  {
+    "id": "chinese-parallel-agents",
+    "text": "把两个独立任务交给并行代理执行。",
+    "paths": ["server/", "web/"],
+    "expected_risk": "R1",
+    "expected_policies": ["P01", "P05", "P07"]
+  },
+  {
+    "id": "chinese-first-principles",
+    "text": "用第一性原理分析这个模糊架构。",
+    "paths": ["src/architecture/"],
+    "expected_risk": "R2",
+    "expected_policies": ["P01", "P04", "P06"]
+  },
+  {
+    "id": "chinese-production-deployment",
+    "text": "修改生产部署配置。",
+    "paths": ["deploy/service.yaml"],
+    "expected_risk": "R2",
+    "expected_policies": ["P01", "P04"]
+  },
+  {
+    "id": "chinese-ground-truth",
+    "text": "真实数据的真值可能有问题。",
+    "paths": ["src/data/"],
+    "expected_risk": "R2",
+    "expected_policies": ["P01", "P04"]
   }
 ]

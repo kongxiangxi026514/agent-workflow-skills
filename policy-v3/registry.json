@@ -35,13 +35,15 @@
       "\\bquick(?:ly)?\\b",
       "\\bminimal change\\b",
       "\\bskip the full process\\b",
-      "\\bdo not use full process\\b"
+      "\\bdo not use full process\\b",
+      "快速|尽快|最小改动|跳过完整流程"
     ],
     "strict_override_patterns": [
       "\\bstrict tdd\\b",
       "\\bfull process\\b",
       "\\bfull sop\\b",
-      "(?:\\bgrill(?:-me)?\\b|/grilling\\b)"
+      "(?:\\bgrill(?:-me)?\\b|/grilling\\b)",
+      "严格\\s*TDD|完整流程|完整\\s*SOP|/审查设计"
     ],
     "change_patterns": [
       "\\badd\\b",
@@ -52,18 +54,23 @@
       "\\bimplement\\b",
       "\\bmodify\\b",
       "\\brefactor\\b",
-      "\\bupdate\\b"
+      "\\bupdate\\b",
+      "添加|新增|修改|修复|实现|重构|更新"
     ],
     "lean_change_patterns": [
       "\\btypo\\b",
-      "\\bspelling\\b"
+      "\\bspelling\\b",
+      "错别字|拼写"
     ],
     "high_risk_patterns": [
       "\\b(?:change|fix|modify|migrate|update)\\b.{0,40}\\b(?:schema|crs|coordinate|geometry)\\b",
       "\\b(?:schema|crs|coordinate|geometry)\\b.{0,40}\\b(?:contract|conversion|change|migration)\\b",
       "\\b(?:training loss|ground truth|real-data|data loss|destructive)\\b",
       "\\b(?:production deployment|cloud gpu|npu|authentication boundary)\\b",
-      "\\bsecurity review\\b"
+      "\\bsecurity review\\b",
+      "(?:修改|修复|迁移|更新).{0,40}(?:schema|模式|坐标|几何|CRS)",
+      "(?:schema|模式|坐标|几何|CRS).{0,40}(?:契约|转换|修改|迁移)",
+      "训练损失|真实数据|数据丢失|破坏性操作|真实数据.{0,20}真值|生产部署|云\\s*GPU|NPU|认证边界|安全审查"
     ],
     "high_risk_path_patterns": [
       "(^|/)(migrations?|schema|geometry|deploy)(/|$)",
@@ -115,7 +122,9 @@
           "\\blatest .{0,30}\\bapi\\b",
           "\\b(?:external|web) research\\b",
           "\\b(?:recent papers?|literature|multi-source comparison)\\b",
-          "\\bgithub (?:issue|repository|commit|pull request)\\b"
+          "\\bgithub (?:issue|repository|commit|pull request)\\b",
+          "\\b(?:api|library) documentation\\b|\\bapi reference\\b|\\bthird[- ]party (?:library|service)\\b",
+          "官方文档|第三方\\s*API|外部研究|最新.{0,30}API|近期论文|文献综述|多源对比|GitHub\\s*(?:问题|仓库|提交|拉取请求)"
         ],
         "none": ["\\blocal (?:function|variable|symbol)\\b"]
       },
@@ -136,7 +145,8 @@
           "\\bcontinual-learning\\b",
           "\\bagents-memory-updater\\b",
           "\\bupdate agents\\.md\\b",
-          "\\b(?:persistent|long-term) memory\\b"
+          "\\b(?:persistent|long-term) memory\\b",
+          "持续学习|更新\\s*AGENTS\\.md|持久(?:化)?记忆|长期记忆"
         ],
         "none": ["\\bmemory usage\\b"],
         "exclusive": true
@@ -158,7 +168,8 @@
           "\\bcode review\\b",
           "\\breview (?:this|the) (?:code|diff|pr|changes?)\\b",
           "\\bbefore merge\\b",
-          "\\bsecurity review\\b"
+          "\\bsecurity review\\b",
+          "审查.{0,20}(?:代码|差异|改动|PR)|合并前(?:审查|检查)|安全审查"
         ],
         "none": ["\\breview (?:this|my) (?:sentence|wording)\\b"]
       },
@@ -178,7 +189,8 @@
         "any": [
           "\\bparallel (?:agents?|workers?|subtasks?|dispatch)\\b",
           "\\bsplit .{0,40}\\bindependent .{0,30}\\b(?:tasks?|workers?)\\b",
-          "\\bmultiple agents?\\b"
+          "\\bmultiple agents?\\b",
+          "并行(?:代理|智能体|工作者|子任务|派发)|多个(?:代理|智能体)|独立任务.{0,30}并行"
         ],
         "none": ["\\bparallel lines?\\b"],
         "requires": ["P07"]
@@ -201,7 +213,8 @@
           "\\bnon-obvious architecture\\b",
           "\\bhard architecture\\b",
           "\\broot cause is unknown\\b",
-          "\\bambiguous design\\b"
+          "\\bambiguous design\\b",
+          "第一性原理|非显然架构|困难架构|根因未知|模糊设计|模糊架构"
         ],
         "none": ["\\bfirst principles heading\\b"]
       },

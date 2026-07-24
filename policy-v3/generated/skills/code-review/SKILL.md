@@ -2,7 +2,7 @@
 name: code-review
 description: "Independent layered review with adversarial checks for high-risk changes."
 ---
-<!-- GENERATED; policy_id=P04; source=policy-v3/fragments/code-review.md; source_sha256=6a452b50308f3ac67d57efa1e4a74985bc6ab49a0acaa7bb6824cb365112f90a; registry_sha256=a0f339fcdd0ef7577e2f20f614ca1a2c3408ca5591f3bd3690710a9b3963e1a9 -->
+<!-- GENERATED; policy_id=P04; source=policy-v3/fragments/code-review.md; source_sha256=6a452b50308f3ac67d57efa1e4a74985bc6ab49a0acaa7bb6824cb365112f90a; registry_sha256=57d781f3619d79152b7a501ea52993e677b977bb9c48115e97328a4a2306b5d0 -->
 
 # Independent Code Review
 
