@@ -29,11 +29,28 @@ ROLE_FIELDS = {
     "reason": {
         "description": "Configured deep-reasoning agent for difficult design and diagnosis.",
         "mode": "subagent",
+        "permission": {
+            "*": "deny",
+            "read": "allow",
+            "glob": "allow",
+            "grep": "allow",
+            "list": "allow",
+            "lsp": "allow",
+            "skill": "allow",
+        },
     },
     "review": {
         "description": "Cross-model reviewer and verifier without edit permission.",
         "mode": "subagent",
-        "permission": {"edit": "deny"},
+        "permission": {
+            "*": "deny",
+            "read": "allow",
+            "glob": "allow",
+            "grep": "allow",
+            "list": "allow",
+            "lsp": "allow",
+            "skill": "allow",
+        },
     },
 }
 ROLE_NAMES = tuple(ROLE_FIELDS)
@@ -337,19 +354,8 @@ def _config_after_migration(data: dict, models: dict[str, str]) -> tuple[dict, d
             raise MigrationError(f"OpenCode agent.{role} must be an object")
         if existing:
             updated = copy.deepcopy(current)
-            if role == "review":
-                if "permission" not in updated:
-                    updated["permission"] = {"edit": "deny"}
-                else:
-                    permission = updated["permission"]
-                    if not isinstance(permission, dict) or (
-                        "edit" in permission and permission["edit"] != "deny"
-                    ):
-                        raise MigrationError(
-                            "OpenCode agent.review permission.edit must be deny when present"
-                        )
-                    if "edit" not in permission:
-                        permission["edit"] = "deny"
+            if role in {"reason", "review"}:
+                updated["permission"] = copy.deepcopy(ROLE_FIELDS[role]["permission"])
             updated["model"] = models[role]
         else:
             updated = {**copy.deepcopy(ROLE_FIELDS[role]), "model": models[role]}
@@ -482,6 +488,8 @@ def _markdown_changes(base: Path, state_dir: Path) -> list[Change]:
             active.append((root_name, agents, path, relative))
     changes = []
     for root_name, agents, path, relative in active:
+        if path.stem not in ROLE_NAMES:
+            continue
         if not path.is_file():
             raise MigrationError(f"OpenCode agent is not a regular Markdown file: {path}")
         try:
@@ -494,10 +502,6 @@ def _markdown_changes(base: Path, state_dir: Path) -> list[Change]:
                 after = UTF8_BOM + after
         except UnicodeError as error:
             raise MigrationError(f"OpenCode Markdown agent is not UTF-8: {path}") from error
-        if path.stem not in ROLE_NAMES:
-            if after != before:
-                changes.append(Change(path, before, after, _file_mode(path)))
-            continue
         relative_text = relative.as_posix()
         state_key = f"{root_name}/{relative_text}"
         if (
@@ -688,24 +692,28 @@ def build_migration_plan(
     updated, managed_hashes = _config_after_migration(data, models)
     config_before = selected.read_bytes() if selected.exists() else None
     config_after = (json.dumps(updated, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
-    changes = [Change(selected, config_before, config_after, _file_mode(selected))]
+    changes = []
+    if config_before != config_after:
+        changes.append(Change(selected, config_before, config_after, _file_mode(selected)))
     changes.extend(_markdown_changes(base, state_dir))
     backup_root = _assert_safe_path(
         base, state_dir / "migration-backups" / _backup_id(backup_id)
     )
     _preflight_migration_targets(base, state_dir, audit, backup_root)
-    payload = _audit_payload(
-        base,
-        selected,
-        changes,
-        managed_hashes,
-        backup_root,
-        binding,
-        config_after,
-    )
-    audit_after = (json.dumps(payload, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
-    existing_audit = audit.read_bytes() if audit.exists() else None
-    audit_mode = _file_mode(audit)
+    audit_change = []
+    if changes:
+        payload = _audit_payload(
+            base,
+            selected,
+            changes,
+            managed_hashes,
+            backup_root,
+            binding,
+            config_after,
+        )
+        audit_after = (json.dumps(payload, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+        existing_audit = audit.read_bytes() if audit.exists() else None
+        audit_change = [Change(audit, existing_audit, audit_after, _file_mode(audit))]
     backup_changes = [
         Change(
             _assert_safe_path(base, backup_root / change.path.relative_to(base)),
@@ -721,7 +729,7 @@ def build_migration_plan(
         state_dir=state_dir,
         backup_root=backup_root,
         changes=tuple(
-            [*backup_changes, *changes, Change(audit, existing_audit, audit_after, audit_mode)]
+            [*backup_changes, *changes, *audit_change]
         ),
     )
 

@@ -127,8 +127,19 @@ class OpenCodeModelMigrationTests(unittest.TestCase):
         self.assertEqual(migrated["agent"]["build"]["model"], "sample/build-v1")
         self.assertEqual(migrated["agent"]["reason"]["model"], "sample/build-v1")
         self.assertEqual(migrated["agent"]["review"]["model"], "sample/review-v1")
-        self.assertEqual(migrated["agent"]["review"]["permission"], {"edit": "deny"})
-        self.assertNotIn("model:", helper.read_text(encoding="utf-8"))
+        self.assertEqual(
+            migrated["agent"]["review"]["permission"],
+            {
+                "*": "deny",
+                "read": "allow",
+                "glob": "allow",
+                "grep": "allow",
+                "list": "allow",
+                "lsp": "allow",
+                "skill": "allow",
+            },
+        )
+        self.assertIn("model:", helper.read_text(encoding="utf-8"))
         self.assertFalse((agents / "build.md").exists())
         retired = self.base / "agent-workflow-skills" / "retired-agents" / "agents" / "build.md"
         self.assertIn("description: legacy", retired.read_text(encoding="utf-8"))
@@ -198,7 +209,18 @@ class OpenCodeModelMigrationTests(unittest.TestCase):
         self.assertEqual(cleaned["agent"]["reason"]["description"], "user changed")
         self.assertNotIn("model", cleaned["agent"]["reason"])
         self.assertNotIn("model", cleaned["agent"]["review"])
-        self.assertEqual(cleaned["agent"]["review"]["permission"], {"edit": "deny"})
+        self.assertEqual(
+            cleaned["agent"]["review"]["permission"],
+            {
+                "*": "deny",
+                "read": "allow",
+                "glob": "allow",
+                "grep": "allow",
+                "list": "allow",
+                "lsp": "allow",
+                "skill": "allow",
+            },
+        )
 
     def test_uninstall_rejects_role_model_drift_without_mutation(self):
         config = self.base / "opencode.json"
@@ -254,7 +276,7 @@ class OpenCodeModelMigrationTests(unittest.TestCase):
         self.assertEqual(config.read_bytes(), config_before)
         self.assertFalse(self.audit.exists())
 
-    def test_nested_bom_agent_is_sanitized_but_unowned_named_role_fails(self):
+    def test_nested_bom_custom_agent_is_preserved_but_unowned_named_role_fails(self):
         config = self.base / "opencode.jsonc"
         config.write_text("{}\n", encoding="utf-8")
         helper = self.base / "agents" / "nested" / "github-helper.md"
@@ -264,7 +286,7 @@ class OpenCodeModelMigrationTests(unittest.TestCase):
         )
         self.assertEqual(self.invoke().returncode, 0)
         self.assertTrue(helper.read_bytes().startswith(b"\xef\xbb\xbf"))
-        self.assertNotIn("model:", helper.read_text(encoding="utf-8-sig"))
+        self.assertIn("model:", helper.read_text(encoding="utf-8-sig"))
 
         self.temp.cleanup()
         self.setUp()
@@ -308,18 +330,16 @@ class OpenCodeModelMigrationTests(unittest.TestCase):
         self.assertIn(b"reparse", result.stderr.lower())
         self.assertEqual(config.read_bytes(), before)
 
-    def test_malformed_nested_frontmatter_fails_before_config_mutation(self):
+    def test_malformed_custom_frontmatter_is_preserved(self):
         config = self.base / "opencode.jsonc"
-        before = b'{"user":"keep"}\n'
-        config.write_bytes(before)
+        config.write_bytes(b'{"user":"keep"}\n')
         helper = self.base / "agents" / "nested" / "github-helper.md"
         helper.parent.mkdir(parents=True)
         helper.write_bytes(b"\xef\xbb\xbf---\nmodel: sample/helper\n")
         result = self.invoke()
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn(b"unterminated", result.stderr.lower())
-        self.assertEqual(config.read_bytes(), before)
-        self.assertFalse(self.audit.exists())
+        self.assertEqual(result.returncode, 0, result.stderr.decode("utf-8", "replace"))
+        self.assertEqual(helper.read_bytes(), b"\xef\xbb\xbf---\nmodel: sample/helper\n")
+        self.assertTrue(self.audit.exists())
 
     def test_reparse_agent_tree_is_rejected_before_mutation(self):
         config = self.base / "opencode.jsonc"
@@ -368,7 +388,7 @@ class OpenCodeModelMigrationTests(unittest.TestCase):
         self.assertEqual(config.read_bytes(), before)
         self.assertTrue(role.is_file())
 
-    def test_quoted_model_keys_are_removed_and_complex_model_yaml_is_rejected(self):
+    def test_custom_agent_frontmatter_is_never_rewritten(self):
         config = self.base / "opencode.jsonc"
         config.write_text("{}\n", encoding="utf-8")
         helper = self.base / "agents" / "nested" / "github-helper.md"
@@ -380,7 +400,7 @@ class OpenCodeModelMigrationTests(unittest.TestCase):
         )
         self.assertEqual(self.invoke().returncode, 0)
         sanitized = helper.read_text(encoding="utf-8")
-        self.assertNotIn("model", sanitized.lower())
+        self.assertIn("model", sanitized.lower())
         self.assertIn("description: helper", sanitized)
         self.assertIn("permission:\n  edit: deny", sanitized)
 
@@ -393,9 +413,7 @@ class OpenCodeModelMigrationTests(unittest.TestCase):
         helper.parent.mkdir()
         helper.write_text("---\nmodel: |\n  unsafe\n---\n", encoding="utf-8")
         result = self.invoke()
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn(b"yaml", result.stderr.lower())
-        self.assertEqual(config.read_bytes(), before)
+        self.assertEqual(result.returncode, 0, result.stderr.decode("utf-8", "replace"))
         self.assertIn("model: |", helper.read_text(encoding="utf-8"))
 
         self.temp.cleanup()
@@ -409,9 +427,7 @@ class OpenCodeModelMigrationTests(unittest.TestCase):
             encoding="utf-8",
         )
         result = self.invoke()
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn(b"yaml", result.stderr.lower())
-        self.assertEqual(config.read_bytes(), before)
+        self.assertEqual(result.returncode, 0, result.stderr.decode("utf-8", "replace"))
         self.assertIn("model: sample/helper", helper.read_text(encoding="utf-8"))
 
         self.temp.cleanup()
@@ -422,9 +438,7 @@ class OpenCodeModelMigrationTests(unittest.TestCase):
         helper.parent.mkdir()
         helper.write_text("---\n<<: *shared\n---\n", encoding="utf-8")
         result = self.invoke()
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn(b"yaml", result.stderr.lower())
-        self.assertEqual(config.read_bytes(), before)
+        self.assertEqual(result.returncode, 0, result.stderr.decode("utf-8", "replace"))
 
     def test_existing_role_fields_are_preserved_and_review_permission_conflicts(self):
         config = self.base / "opencode.json"
@@ -452,7 +466,15 @@ class OpenCodeModelMigrationTests(unittest.TestCase):
         self.assertEqual(migrated["agent"]["build"]["custom"], {"nested": True})
         self.assertEqual(
             migrated["agent"]["review"]["permission"],
-            {"edit": "deny", "bash": "ask", "prompt": "keep"},
+            {
+                "*": "deny",
+                "read": "allow",
+                "glob": "allow",
+                "grep": "allow",
+                "list": "allow",
+                "lsp": "allow",
+                "skill": "allow",
+            },
         )
         self.assertEqual(migrated["agent"]["reason"]["mode"], "subagent")
 
@@ -461,7 +483,18 @@ class OpenCodeModelMigrationTests(unittest.TestCase):
         cleaned = parse_jsonc(config)
         self.assertNotIn("model", cleaned["agent"]["build"])
         self.assertEqual(cleaned["agent"]["build"]["custom"], {"nested": True})
-        self.assertEqual(cleaned["agent"]["review"]["permission"]["bash"], "ask")
+        self.assertEqual(
+            cleaned["agent"]["review"]["permission"],
+            {
+                "*": "deny",
+                "read": "allow",
+                "glob": "allow",
+                "grep": "allow",
+                "list": "allow",
+                "lsp": "allow",
+                "skill": "allow",
+            },
+        )
 
         self.temp.cleanup()
         self.setUp()
@@ -472,7 +505,16 @@ class OpenCodeModelMigrationTests(unittest.TestCase):
         )
         self.assertEqual(self.invoke().returncode, 0)
         self.assertEqual(
-            parse_jsonc(config)["agent"]["review"]["permission"], {"edit": "deny"}
+            parse_jsonc(config)["agent"]["review"]["permission"],
+            {
+                "*": "deny",
+                "read": "allow",
+                "glob": "allow",
+                "grep": "allow",
+                "list": "allow",
+                "lsp": "allow",
+                "skill": "allow",
+            },
         )
         self.assertTrue(parse_jsonc(config)["agent"]["review"]["custom"])
 
@@ -482,12 +524,12 @@ class OpenCodeModelMigrationTests(unittest.TestCase):
         conflict = copy = {
             "agent": {"review": {"model": "sample/old", "permission": {"edit": "allow"}}}
         }
-        before = json.dumps(copy).encode("utf-8")
-        config.write_bytes(before)
+        config.write_bytes(json.dumps(copy).encode("utf-8"))
         result = self.invoke()
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn(b"permission", result.stderr.lower())
-        self.assertEqual(config.read_bytes(), before)
+        self.assertEqual(result.returncode, 0, result.stderr.decode("utf-8", "replace"))
+        self.assertEqual(
+            parse_jsonc(config)["agent"]["review"]["permission"]["*"], "deny"
+        )
 
     def test_audit_never_serializes_model_ids_and_lock_contention_fails_loudly(self):
         config = self.base / "opencode.jsonc"
@@ -569,6 +611,53 @@ class OpenCodeModelMigrationTests(unittest.TestCase):
             helper._write_atomic = original_write
         self.assertEqual(first.read_bytes(), b"first-before")
         self.assertEqual(second.read_bytes(), b"attacker-replacement")
+
+    def test_readonly_roles_are_fail_closed_and_custom_agents_stay_unchanged(self):
+        config = self.base / "opencode.jsonc"
+        config.write_text("{}\n", encoding="utf-8")
+        custom = self.base / "agents" / "project-helper.md"
+        custom.parent.mkdir()
+        custom_before = (
+            b"---\ndescription: project helper\nmodel: sample/custom\n---\n"
+            b"Keep this custom agent independent.\n"
+        )
+        custom.write_bytes(custom_before)
+
+        self.assertEqual(self.invoke().returncode, 0)
+
+        migrated = parse_jsonc(config)
+        for role in ("reason", "review"):
+            self.assertEqual(
+                migrated["agent"][role]["permission"],
+                {
+                    "*": "deny",
+                    "read": "allow",
+                    "glob": "allow",
+                    "grep": "allow",
+                    "list": "allow",
+                    "lsp": "allow",
+                    "skill": "allow",
+                },
+            )
+        self.assertEqual(custom.read_bytes(), custom_before)
+
+    def test_unchanged_migration_does_not_rewrite_or_create_backup(self):
+        config = self.base / "opencode.jsonc"
+        config.write_text("{}\n", encoding="utf-8")
+        self.assertEqual(self.invoke().returncode, 0)
+        before = config.read_bytes()
+        audit_before = self.audit.read_bytes()
+        backup_root = self.binding.parent / "migration-backups"
+        backups_before = sorted(path.relative_to(backup_root) for path in backup_root.rglob("*"))
+
+        self.assertEqual(self.invoke().returncode, 0)
+
+        self.assertEqual(config.read_bytes(), before)
+        self.assertEqual(self.audit.read_bytes(), audit_before)
+        self.assertEqual(
+            sorted(path.relative_to(backup_root) for path in backup_root.rglob("*")),
+            backups_before,
+        )
 
 
 if __name__ == "__main__":
