@@ -65,6 +65,7 @@ MANAGED_MARKER = "<!-- Managed by agent-workflow-skills. -->"
 UTF8_BOM = b"\xef\xbb\xbf"
 SPINE_BEGIN = "<!-- BEGIN agent-workflow-skills spine -->"
 SPINE_END = "<!-- END agent-workflow-skills spine -->"
+MEMORY_PLUGIN = "./plugins/agent-workflow-memory.ts"
 
 
 class MigrationError(ValueError):
@@ -334,14 +335,23 @@ def _read_jsonc_object(path: Path) -> dict:
     return data
 
 
-def _models(binding: Path) -> dict[str, str]:
+def _models(binding: Path, available_models: set[str] | None = None) -> dict[str, str]:
     try:
-        return _load_binding("opencode", binding)["models"]
+        models = _load_binding("opencode", binding)["models"]
     except DispatchResolutionError as error:
         raise MigrationError(f"invalid OpenCode model binding: {error}") from error
+    if available_models is not None:
+        missing = sorted(set(models.values()) - available_models)
+        if missing:
+            raise MigrationError(
+                "configured OpenCode role models are unavailable in the supplied registry"
+            )
+    return models
 
 
-def _config_after_migration(data: dict, models: dict[str, str]) -> tuple[dict, dict]:
+def _config_after_migration(
+    data: dict, models: dict[str, str], enable_local_memory: bool
+) -> tuple[dict, dict, bool]:
     result = copy.deepcopy(data)
     roles = result.setdefault("agent", {})
     if not isinstance(roles, dict):
@@ -361,7 +371,17 @@ def _config_after_migration(data: dict, models: dict[str, str]) -> tuple[dict, d
             updated = {**copy.deepcopy(ROLE_FIELDS[role]), "model": models[role]}
         roles[role] = updated
         managed_hashes[role] = _sha256(models[role].encode("utf-8"))
-    return result, managed_hashes
+    if not enable_local_memory:
+        return result, managed_hashes, False
+    plugins = result.get("plugin", [])
+    if isinstance(plugins, str):
+        plugins = [plugins]
+    if not isinstance(plugins, list) or not all(isinstance(item, str) for item in plugins):
+        raise MigrationError("OpenCode plugin configuration must be a string or string array")
+    added = MEMORY_PLUGIN not in plugins
+    if added:
+        result["plugin"] = [*plugins, MEMORY_PLUGIN]
+    return result, managed_hashes, added
 
 
 def _strip_model_frontmatter(text: str) -> str:
@@ -614,6 +634,7 @@ def _audit_payload(
     backup_root: Path,
     binding: Path,
     config_after: bytes,
+    local_memory_plugin_added: bool,
 ) -> dict:
     files = []
     for change in changes:
@@ -638,6 +659,7 @@ def _audit_payload(
         "managed_model_sha256": managed_hashes,
         "binding_sha256": _sha256(binding.read_bytes()),
         "config_sha256": _sha256(config_after),
+        "local_memory_plugin_added": local_memory_plugin_added,
         "files": files,
     }
 
@@ -680,6 +702,8 @@ def build_migration_plan(
     audit: Path,
     explicit: str | None,
     backup_id: str | None = None,
+    available_models: set[str] | None = None,
+    enable_local_memory: bool = False,
 ) -> MigrationPlan:
     base = _absolute(base)
     state_dir = _assert_safe_path(base, audit.parent)
@@ -688,8 +712,10 @@ def build_migration_plan(
     selected = select_config(base, explicit)
     _assert_tree_no_reparse(base, selected.parent)
     data = _read_jsonc_object(selected)
-    models = _models(binding)
-    updated, managed_hashes = _config_after_migration(data, models)
+    models = _models(binding, available_models)
+    updated, managed_hashes, local_memory_plugin_added = _config_after_migration(
+        data, models, enable_local_memory
+    )
     config_before = selected.read_bytes() if selected.exists() else None
     config_after = (json.dumps(updated, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
     changes = []
@@ -710,6 +736,7 @@ def build_migration_plan(
             backup_root,
             binding,
             config_after,
+            local_memory_plugin_added,
         )
         audit_after = (json.dumps(payload, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
         existing_audit = audit.read_bytes() if audit.exists() else None
@@ -742,14 +769,26 @@ def migrate(
     fail_after_write: int | None = None,
     check: bool = False,
     backup_id: str | None = None,
+    available_models: set[str] | None = None,
+    enable_local_memory: bool = False,
 ) -> None:
     if check:
-        build_migration_plan(base, binding, audit, explicit, backup_id)
+        build_migration_plan(
+            base, binding, audit, explicit, backup_id, available_models, enable_local_memory
+        )
         return
     absolute_base = _absolute(base)
     state_dir = _assert_safe_path(absolute_base, Path(audit).parent)
     with MigrationLock(absolute_base, state_dir):
-        plan = build_migration_plan(absolute_base, binding, audit, explicit, backup_id)
+        plan = build_migration_plan(
+            absolute_base,
+            binding,
+            audit,
+            explicit,
+            backup_id,
+            available_models,
+            enable_local_memory,
+        )
         try:
             _apply_transaction(
                 list(plan.changes),
@@ -918,6 +957,39 @@ def _bundle_changes(base: Path, stage: Path, state_dir: Path) -> list[Change]:
     after = _spine_text(before, adapter.read_bytes())
     if before != after:
         changes.append(Change(agents, before, after, _file_mode(agents)))
+    memory_source = stage / "plugins" / "agent-workflow-memory.ts"
+    if memory_source.exists():
+        memory_files = (
+            (stage / "local_memory.py", state_dir / "local_memory.py"),
+            (
+                stage / "verify_opencode_memory_plugin.py",
+                state_dir / "verify_opencode_memory_plugin.py",
+            ),
+            (memory_source, base / "plugins" / "agent-workflow-memory.ts"),
+            (
+                stage / "plugins" / "local-memory-contract.json",
+                base / "plugins" / "local-memory-contract.json",
+            ),
+        )
+        for source, target in memory_files:
+            if not source.is_file():
+                raise MigrationError(f"required local-memory staged artifact is missing: {source}")
+            target = _assert_safe_path(base, target)
+            key = (
+                f"plugins/{target.name}"
+                if target.parent.name == "plugins"
+                else target.relative_to(state_dir).as_posix()
+            )
+            if target.exists() and (
+                owned is None or owned.get(key) != _sha256(target.read_bytes())
+            ):
+                raise MigrationError(
+                    f"local-memory artifact is not bundle-owned: {target}"
+                )
+            before = target.read_bytes() if target.exists() else None
+            after = source.read_bytes()
+            if before != after:
+                changes.append(Change(target, before, after, _file_mode(target)))
     for name in (
         "model-routing.jsonc",
         "dispatch_resolver.py",
@@ -947,15 +1019,27 @@ def install_transaction(
     check: bool = False,
     fail_after_write: int | None = None,
     backup_id: str | None = None,
+    available_models: set[str] | None = None,
+    enable_local_memory: bool = False,
 ) -> None:
     if check:
-        plan = build_migration_plan(base, binding, audit, explicit, backup_id)
+        plan = build_migration_plan(
+            base, binding, audit, explicit, backup_id, available_models, enable_local_memory
+        )
         _bundle_changes(plan.base, stage, plan.state_dir)
         return
     absolute_base = _absolute(base)
     state_dir = _assert_safe_path(absolute_base, Path(audit).parent)
     with MigrationLock(absolute_base, state_dir):
-        plan = build_migration_plan(absolute_base, binding, audit, explicit, backup_id)
+        plan = build_migration_plan(
+            absolute_base,
+            binding,
+            audit,
+            explicit,
+            backup_id,
+            available_models,
+            enable_local_memory,
+        )
         outer = _bundle_changes(plan.base, stage, plan.state_dir)
         try:
             _apply_transaction(
@@ -988,7 +1072,7 @@ def _failure_injection(value: int | None) -> int | None:
     return injected
 
 
-def _validate_audit(audit: dict) -> tuple[str, dict]:
+def _validate_audit(audit: dict) -> tuple[str, dict, bool]:
     if audit.get("bundle") != BUNDLE or audit.get("version") != AUDIT_VERSION:
         raise MigrationError("unrecognized OpenCode model migration audit")
     config = audit.get("config")
@@ -1003,7 +1087,45 @@ def _validate_audit(audit: dict) -> tuple[str, dict]:
         value = audit.get(key)
         if not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{64}", value):
             raise MigrationError(f"invalid OpenCode model migration audit {key}")
-    return config, model_hashes
+    memory_plugin_added = audit.get("local_memory_plugin_added", False)
+    if not isinstance(memory_plugin_added, bool):
+        raise MigrationError("invalid OpenCode local-memory plugin audit")
+    return config, model_hashes, memory_plugin_added
+
+
+def _memory_uninstall_changes(
+    base: Path, state_dir: Path, memory_plugin_added: bool
+) -> list[Change]:
+    if not memory_plugin_added:
+        return []
+    state_path = _assert_safe_path(base, state_dir / "install-state.json")
+    if not state_path.exists():
+        return []
+    try:
+        state = parse_jsonc(state_path.read_bytes().decode("utf-8-sig"))
+    except (OSError, UnicodeError, ValueError, json.JSONDecodeError) as error:
+        raise MigrationError(f"invalid local-memory ownership state: {error}") from error
+    owned = state.get("owned_sha256") if isinstance(state, dict) else None
+    if not isinstance(state, dict) or state.get("local_memory_enabled") is not True:
+        return []
+    if not isinstance(owned, dict):
+        raise MigrationError("invalid local-memory ownership manifest")
+    targets = (
+        (state_dir / "local_memory.py", "local_memory.py"),
+        (
+            state_dir / "verify_opencode_memory_plugin.py",
+            "verify_opencode_memory_plugin.py",
+        ),
+        (base / "plugins" / "agent-workflow-memory.ts", "plugins/agent-workflow-memory.ts"),
+        (base / "plugins" / "local-memory-contract.json", "plugins/local-memory-contract.json"),
+    )
+    changes = []
+    for path, key in targets:
+        path = _assert_safe_path(base, path)
+        if not path.is_file() or owned.get(key) != _sha256(path.read_bytes()):
+            raise MigrationError(f"managed local-memory artifact drifted: {path}")
+        changes.append(Change(path, path.read_bytes(), None, _file_mode(path)))
+    return changes
 
 
 def uninstall(base: Path, audit_path: Path, *, check: bool = False) -> None:
@@ -1016,7 +1138,7 @@ def uninstall(base: Path, audit_path: Path, *, check: bool = False) -> None:
         audit = parse_jsonc(audit_path.read_bytes().decode("utf-8-sig"))
     except (OSError, UnicodeError, ValueError, json.JSONDecodeError) as error:
         raise MigrationError(f"invalid OpenCode model migration audit: {error}") from error
-    config_relative, model_hashes = _validate_audit(audit)
+    config_relative, model_hashes, memory_plugin_added = _validate_audit(audit)
     config = _assert_safe_path(base, base / config_relative)
     if config.name not in {"opencode.json", "opencode.jsonc"} or not config.exists():
         raise MigrationError("managed OpenCode config is missing or invalid")
@@ -1035,8 +1157,6 @@ def uninstall(base: Path, audit_path: Path, *, check: bool = False) -> None:
             raise MigrationError(
                 f"managed OpenCode role model drifted: {role}"
             )
-    if check:
-        return
     for role in model_hashes:
         current = roles[role]
         del current["model"]
@@ -1044,14 +1164,37 @@ def uninstall(base: Path, audit_path: Path, *, check: bool = False) -> None:
             del roles[role]
     if not roles:
         del data["agent"]
+    if memory_plugin_added:
+        plugins = data.get("plugin")
+        if isinstance(plugins, str):
+            if plugins == MEMORY_PLUGIN:
+                del data["plugin"]
+        elif isinstance(plugins, list) and all(isinstance(item, str) for item in plugins):
+            remaining = [item for item in plugins if item != MEMORY_PLUGIN]
+            if remaining:
+                data["plugin"] = remaining
+            else:
+                data.pop("plugin", None)
+        else:
+            raise MigrationError("managed OpenCode local-memory plugin configuration drifted")
+    memory_changes = _memory_uninstall_changes(
+        base, audit_path.parent, memory_plugin_added
+    )
+    if check:
+        return
     before = config.read_bytes()
     mode = _file_mode(config)
     after = (json.dumps(data, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
     try:
-        _write_atomic(config, after, mode)
-        audit_path.unlink()
-    except OSError as error:
-        _write_atomic(config, before, mode)
+        _apply_transaction(
+            [
+                Change(config, before, after, mode),
+                *memory_changes,
+                Change(audit_path, audit_path.read_bytes(), None, _file_mode(audit_path)),
+            ],
+            base=base,
+        )
+    except (OSError, MigrationError) as error:
         raise MigrationError(f"uninstall rolled back: {error}") from error
 
 
@@ -1066,13 +1209,22 @@ def main() -> int:
     parser.add_argument("--fail-after-write", type=int)
     parser.add_argument("--backup-id")
     parser.add_argument("--stage", type=Path)
+    parser.add_argument("--available-model", action="append")
+    parser.add_argument("--enable-local-memory", action="store_true")
     args = parser.parse_args()
     try:
         if args.fail_after_write is not None and args.fail_after_write < 1:
             raise MigrationError("--fail-after-write must be positive")
         if args.uninstall:
-            if args.fail_after_write is not None or args.backup_id or args.stage:
-                raise MigrationError("--backup-id, --stage and --fail-after-write are only valid for migration")
+            if (
+                args.fail_after_write is not None
+                or args.backup_id
+                or args.stage
+                or args.enable_local_memory
+            ):
+                raise MigrationError(
+                    "--backup-id, --stage, --fail-after-write and --enable-local-memory are only valid for migration"
+                )
             uninstall(args.config_dir, args.audit, check=args.check)
         elif args.stage:
             install_transaction(
@@ -1084,6 +1236,10 @@ def main() -> int:
                 check=args.check,
                 fail_after_write=_failure_injection(args.fail_after_write),
                 backup_id=args.backup_id,
+                available_models=None
+                if args.available_model is None
+                else set(args.available_model),
+                enable_local_memory=args.enable_local_memory,
             )
         else:
             migrate(
@@ -1094,6 +1250,8 @@ def main() -> int:
                 _failure_injection(args.fail_after_write),
                 args.check,
                 args.backup_id,
+                None if args.available_model is None else set(args.available_model),
+                args.enable_local_memory,
             )
     except (MigrationError, OSError, UnicodeError) as error:
         print(f"OpenCode model migration failed: {error}", file=sys.stderr)

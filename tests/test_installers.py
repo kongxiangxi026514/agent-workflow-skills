@@ -796,6 +796,57 @@ class InstallerTests(unittest.TestCase):
         self.assertEqual(self.invoke("uninstall.ps1", "opencode", "-OpenCodeConfigDir", str(custom)).returncode, 0)
         remaining_roles = json.loads(config.read_text(encoding="utf-8"))["agent"]
         self.assertTrue(all("model" not in role for role in remaining_roles.values()))
+
+    def test_explicit_local_memory_install_is_probed_and_uninstalls_runtime(self):
+        custom = self.home / "local-memory"
+        result = self.invoke(
+            "install.ps1",
+            "opencode",
+            "-OpenCodeConfigDir",
+            str(custom),
+            *MIGRATE,
+            "-EnableLocalMemory",
+            "-OpenCodeBin",
+            sys.executable,
+            *MODELS,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr.decode("utf-8", "replace"))
+        config = json.loads((custom / "opencode.jsonc").read_text(encoding="utf-8"))
+        self.assertIn("./plugins/agent-workflow-memory.ts", config["plugin"])
+        self.assertTrue((custom / "plugins" / "agent-workflow-memory.ts").is_file())
+        self.assertTrue((custom / "agent-workflow-skills" / "local_memory.py").is_file())
+        state = json.loads(
+            (custom / "agent-workflow-skills" / "install-state.json").read_text(encoding="utf-8")
+        )
+        self.assertTrue(state["local_memory_enabled"])
+
+        result = self.invoke(
+            "uninstall.ps1",
+            "opencode",
+            "-OpenCodeConfigDir",
+            str(custom),
+        )
+        self.assertEqual(result.returncode, 0, result.stderr.decode("utf-8", "replace"))
+        config = json.loads((custom / "opencode.jsonc").read_text(encoding="utf-8"))
+        self.assertNotIn("plugin", config)
+        self.assertFalse((custom / "plugins" / "agent-workflow-memory.ts").exists())
+        self.assertFalse((custom / "agent-workflow-skills" / "local_memory.py").exists())
+
+    def test_explicit_open_code_model_registry_fails_loudly_before_install(self):
+        custom = self.home / "registry"
+        result = self.invoke(
+            "install.ps1",
+            "opencode",
+            "-OpenCodeConfigDir",
+            str(custom),
+            *MIGRATE,
+            "-AvailableOpenCodeModel",
+            "acme/terra",
+            *MODELS,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse((custom / "opencode.jsonc").exists())
+        self.assertFalse((custom / "agent-workflow-skills" / "install-state.json").exists())
     def test_generated_runtime_policy_contains_roles_not_model_ids(self):
         generated = ROOT / "policy-v3/generated"
         files = sorted((generated / "adapters").rglob("*")) + sorted((generated / "skills").rglob("SKILL.md"))
@@ -884,6 +935,25 @@ run "$repo/install.sh" --tool opencode --opencode-config-dir "$cfg" --migrate-op
 grep -q '^model:' "$cfg/agent/nested/github-helper.md"
 grep -q '"model": "huawei/glm5.2"' "$cfg/opencode.jsonc"
 ! test -e "$cfg/agent-workflow-skills/migration-backups/"*/agent/nested/github-helper.md
+''')
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+
+    def test_bash_local_memory_install_and_uninstall(self):
+        result = self.run_bash(r'''
+set -euo pipefail
+repo="$1"; root="$(mktemp -d)"; trap 'rm -rf "$root"' EXIT; export HOME="$root/home"
+cfg="$root/opencode"; mkdir -p "$cfg"
+run() { env -i HOME="$HOME" PATH=/usr/local/bin:/usr/bin:/bin bash "$@"; }
+run "$repo/install.sh" --tool opencode --opencode-config-dir "$cfg" --migrate-opencode-model-config \
+  --build-model acme/terra --review-model other/glm \
+  --enable-local-memory --opencode-bin python3
+grep -q 'agent-workflow-memory.ts' "$cfg/opencode.jsonc"
+test -f "$cfg/plugins/agent-workflow-memory.ts"
+test -f "$cfg/agent-workflow-skills/local_memory.py"
+run "$repo/uninstall.sh" --tool opencode --opencode-config-dir "$cfg"
+! grep -q 'agent-workflow-memory.ts' "$cfg/opencode.jsonc"
+test ! -e "$cfg/plugins/agent-workflow-memory.ts"
+test ! -e "$cfg/agent-workflow-skills/local_memory.py"
 ''')
         self.assertEqual(result.returncode, 0, result.stderr.decode())
 

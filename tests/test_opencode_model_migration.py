@@ -659,6 +659,46 @@ class OpenCodeModelMigrationTests(unittest.TestCase):
             backups_before,
         )
 
+    def test_explicit_model_registry_rejects_unavailable_role_before_mutation(self):
+        config = self.base / "opencode.jsonc"
+        before = b'{"user":"keep"}\n'
+        config.write_bytes(before)
+
+        result = self.invoke(
+            "--available-model",
+            "sample/build-v1",
+            "--available-model",
+            "sample/review-v1",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr.decode("utf-8", "replace"))
+
+        self.temp.cleanup()
+        self.setUp()
+        config = self.base / "opencode.jsonc"
+        config.write_bytes(before)
+        result = self.invoke("--available-model", "sample/build-v1")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(b"unavailable", result.stderr.lower())
+        self.assertEqual(config.read_bytes(), before)
+        self.assertFalse(self.audit.exists())
+
+    def test_local_memory_plugin_registration_is_audited_and_reversible(self):
+        config = self.base / "opencode.jsonc"
+        config.write_text('{"plugin":["existing-plugin"]}\n', encoding="utf-8")
+
+        result = self.invoke("--enable-local-memory")
+        self.assertEqual(result.returncode, 0, result.stderr.decode("utf-8", "replace"))
+        self.assertEqual(
+            parse_jsonc(config)["plugin"],
+            ["existing-plugin", "./plugins/agent-workflow-memory.ts"],
+        )
+        audit = json.loads(self.audit.read_text(encoding="utf-8"))
+        self.assertTrue(audit["local_memory_plugin_added"])
+
+        result = self.invoke("--uninstall")
+        self.assertEqual(result.returncode, 0, result.stderr.decode("utf-8", "replace"))
+        self.assertEqual(parse_jsonc(config)["plugin"], ["existing-plugin"])
+
 
 if __name__ == "__main__":
     unittest.main()
