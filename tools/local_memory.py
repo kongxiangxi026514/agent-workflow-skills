@@ -333,7 +333,9 @@ class MemoryStore:
                     connection.commit()
                     return {"promoted": 0, "quarantined": 1, "rejected": 0}
 
-                should_promote = explicit or recurrence >= 3
+                should_promote = (
+                    kind == "preference" and explicit
+                ) or recurrence >= 3
                 if not should_promote:
                     connection.commit()
                     return {"promoted": 0, "quarantined": 0, "rejected": 0}

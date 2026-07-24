@@ -53,7 +53,10 @@ class LocalMemoryTests(unittest.TestCase):
         store = self.store()
         sentinel = "LEAK-CANARY-4e7c48c5"
 
-        result = store.capture(f"My token is {sentinel}; remember it.", outcome="success")
+        result = store.capture(
+            f"I prefer API_KEY={sentinel} for every environment.",
+            outcome="success",
+        )
 
         self.assertEqual(result["rejected"], 1)
         for path in (store.database_path, store.database_path.with_name(f"{store.database_path.name}-wal")):
@@ -72,7 +75,13 @@ class LocalMemoryTests(unittest.TestCase):
         self.assertEqual(pending.search("focused tests", limit=5), [])
 
         active = self.store("project", project_a)
-        self.assertEqual(active.capture(text, outcome="success")["promoted"], 1)
+        for session in ("one", "two"):
+            self.assertEqual(
+                active.capture(text, session_id=session, outcome="success")["promoted"], 0
+            )
+        self.assertEqual(
+            active.capture(text, session_id="three", outcome="success")["promoted"], 1
+        )
         self.assertEqual(len(active.search("focused tests", limit=5)), 1)
         self.assertEqual(self.store("global").search("focused tests", limit=5), [])
         self.assertEqual(self.store("project", project_b).search("focused tests", limit=5), [])
@@ -162,6 +171,23 @@ class LocalMemoryTests(unittest.TestCase):
         self.assertEqual(telemetry, 1)
         payload = store.database_path.read_bytes()
         self.assertNotIn(prompt.encode(), payload)
+
+    def test_interrupted_promotion_rolls_back_all_database_writes(self):
+        store = self.store()
+        original = store._rebuild_fts
+
+        def fail(_connection):
+            raise OSError("simulated interruption")
+
+        store._rebuild_fts = fail
+        try:
+            with self.assertRaises(OSError):
+                store.capture("I prefer rollback-safe writes.", outcome="success")
+        finally:
+            store._rebuild_fts = original
+
+        self.assertEqual(store.status()["active"], 0)
+        self.assertEqual(store.status()["generation"], 0)
 
 
 if __name__ == "__main__":
