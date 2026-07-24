@@ -1,6 +1,6 @@
 # agent-workflow-skills
 
-一套面向 Cursor、OpenCode 和 Claude 的可移植 AI 编码工作流。v3 以短小的 L0 路由器决定风险和按需加载的策略片段；安装器从唯一的 `policy-v3/registry.json` 渲染受管产物，而不是要求手工复制规则。
+一套面向 Cursor、OpenCode 和 Claude 的可移植 AI 编码工作流。v4 保留 v3 的短小 L0 路由器和按需策略，并为 OpenCode 提供可选、本地事务化记忆；安装器从唯一的 `policy-v3/registry.json` 渲染受管产物，而不是要求手工复制规则。
 
 ## 适用场景与边界
 
@@ -12,6 +12,8 @@
 - 用安装器管理受管规则、skills 和 ownership state，并在刷新前发现漂移。
 
 本项目不提供模型、模型访问权限、托管运行时、CI 服务或安全控制替代品；它也不保证某个主机实际选择的运行时模型。请把主机的权限、审批、代码审查和测试作为独立控制。
+
+OpenCode 的本地记忆不是云服务：它是显式 opt-in 的 SQLite/WAL 数据库，按全局和项目命名空间隔离，只保存脱敏结构化摘要、置信度、证据哈希和代次。它**不保存原始对话、代码或工具输出**，也不自动修改 `AGENTS.md`、路由、模型、权限或 workflow 源码。
 
 ## v3 架构
 
@@ -47,7 +49,7 @@ Cursor 默认 `lean`；OpenCode 和 Claude 默认 `balanced`。`lean`/`balanced`
 
 1. **Git**：获取、升级或回滚此 source checkout。
 2. **可执行的 Python 3**：安装器用它校验 JSONC、binding 和生成物。
-3. **至少一个主机**：Cursor、OpenCode 或 Claude。
+3. **至少一个主机**：Cursor、OpenCode 或 Claude；启用 OpenCode 本地记忆时还需要可执行的 OpenCode CLI 通过兼容性 probe。
 
 Windows 使用 PowerShell 脚本；Linux 和 macOS 使用 bash 脚本。示例中的 `sample-*` / `sample/*` 是仅为通过 CLI 格式校验的示例 ID，不代表真实、可用或推荐的运行时模型。首次安装 Cursor 或 OpenCode 时必须提供 `build` 与 `review` ID。
 
@@ -99,16 +101,26 @@ OpenCode 默认使用 `$HOME/.config/opencode`；可用 `-OpenCodeConfigDir` / `
 ```powershell
 .\install.ps1 -Tool opencode -OpenCodeConfigDir "$HOME\.config\opencode" `
   -MigrateOpenCodeModelConfig `
-  -BuildModel sample/build-v1 -ReviewModel sample/review-v1
+  -BuildModel sample/build-v1 -ReviewModel sample/review-v1 `
+  -AvailableOpenCodeModel sample/build-v1 -AvailableOpenCodeModel sample/review-v1 `
+  -EnableLocalMemory -OpenCodeBin opencode
 ```
 
 ```bash
 ./install.sh --tool opencode --opencode-config-dir "$HOME/.config/opencode" \
   --migrate-opencode-model-config \
-  --build-model sample/build-v1 --review-model sample/review-v1
+  --build-model sample/build-v1 --review-model sample/review-id \
+  --available-opencode-model sample/build-v1 --available-opencode-model sample/review-id \
+  --enable-local-memory --opencode-bin opencode
 ```
 
-OpenCode binding 位于 `<config-dir>/agent-workflow-skills/model-routing.jsonc`。为保护已有配置，默认安装会 fail-loud；只有带迁移 opt-in 才读取并修改一个选定的 `opencode.json` / `opencode.jsonc`。`-OpenCodeModelConfig` / `--opencode-model-config` 可显式选择其一；否则仅在恰好一个存在时自动选择，都不存在时新建 `opencode.jsonc`，两个同时存在时拒绝。迁移会在 `<config-dir>/agent-workflow-skills/migration-backups/` 逐字节备份原文件，并记录 SHA-256 audit。它递归检查 OpenCode 的 `agent/` 与 `agents/`；若任一根目录中已有自定义的 `build.md`、`reason.md` 或 `review.md`，安装器不会移动它：请先手动重命名或迁移该 agent，再重试。迁移使用排他 lock 和尽力的 no-follow/reparse identity 检查来防御正常并发；同一 OS 用户能在检查与提交之间恶意替换目录的场景超出此纯 Python 跨平台机制的安全保证。
+OpenCode binding 位于 `<config-dir>/agent-workflow-skills/model-routing.jsonc`。为保护已有配置，默认安装会 fail-loud；只有带迁移 opt-in 才读取并修改一个选定的 `opencode.json` / `opencode.jsonc`。`-OpenCodeModelConfig` / `--opencode-model-config` 可显式选择其一；否则仅在恰好一个存在时自动选择，都不存在时新建 `opencode.jsonc`，两个同时存在时拒绝。`-AvailableOpenCodeModel` / `--available-opencode-model` 可重复传入当前 `opencode models` 的完整清单；提供时安装器必须验证 build/effective-reason/review 三者均可用，绝不 fallback。reason 和 review 均为 fail-closed 只读角色：未知工具、edit、bash、task 和外部目录都会被拒绝。迁移只退休 marker+hash 同时证明属于 bundle 的同名角色 Markdown；**自定义 OpenCode Markdown agent 从不被改写**。迁移使用排他 lock 和尽力的 no-follow/reparse identity 检查来防御正常并发；同一 OS 用户能在检查与提交之间恶意替换目录的场景超出此纯 Python 跨平台机制的安全保证。
+
+### OpenCode 可选本地记忆
+
+`-EnableLocalMemory` / `--enable-local-memory` 才会安装插件、兼容性 contract 和本地 runtime。安装器会运行 `opencode --version` probe；不满足 contract 或 probe 失败时整次安装回滚。插件只短暂处理用户消息，使用 `chat.message`、session idle、system-transform 和 compaction hooks；检索注入受 320-token 硬预算约束。数据库在 OS data dir 下使用 SQLite WAL，项目 namespace 用 canonical Git identity 隔离；冲突、低置信度、秘密与原始内容一律隔离或拒绝。
+
+自动晋升仅作用于该数据库：显式偏好、跨 3 个独立会话的习惯、以及在 3 个完成会话中重复出现的项目约定可进入活跃记忆。每次晋升是可回滚 generation。`AGENTS.md` 仍遵循人工审批 gate；记忆不会自动修改 `AGENTS.md`、路由词表、模型、权限或代码。
 
 ### Claude：机器级安装
 
@@ -160,7 +172,7 @@ git pull --ff-only origin main
 
 ### 卸载
 
-卸载只移除 ownership state 或 marker 证明属于本项目的文件；OpenCode 仅删除 audit 中仍与受管值一致的 `agent.build/reason/review` 字段，绝不恢复或写回旧的 Markdown `model:` 硬编码。
+卸载只移除 ownership state 或 marker 证明属于本项目的文件；OpenCode 仅删除 audit 中仍与受管值一致的 `agent.build/reason/review` 字段和本包安装的本地 memory plugin，绝不恢复或写回旧的 Markdown `model:` 硬编码。本地记忆数据库默认保留；使用 `local_memory_rollback` 工具回滚 generation，或在确认后手动删除 OS data-dir 的 namespace。
 
 ```powershell
 .\uninstall.ps1 -Tool cursor -Project "D:\src\my-project"
@@ -196,12 +208,16 @@ git switch --detach <known-good-commit>
 ```powershell
 python .\tools\render_policy.py --check
 python .\tools\audit_context_budget.py --json
+python .\tools\verify_opencode_memory_plugin.py
+python .\tools\evaluate_local_memory.py
 python -m unittest discover -s tests -v
 ```
 
 ```bash
 python3 tools/render_policy.py --check
 python3 tools/audit_context_budget.py --json
+python3 tools/verify_opencode_memory_plugin.py
+python3 tools/evaluate_local_memory.py
 python3 -m unittest discover -s tests -v
 ```
 
@@ -213,7 +229,7 @@ python3 -m unittest discover -s tests -v
 - **Cursor 提示缺少项目路径**：`cursor` 和 `all` 必须给 `-Project` / `--project`，因为 L0 规则按 checkout 写入。
 - **generated policy drift**：不要手改 generated adapter 或 skill；审阅改动后运行对应卸载，再从 source checkout 重装。
 - **ownership 冲突**：安装器拒绝覆盖不属于 bundle 的同名文件。选择另一个配置目录，或人工决定如何迁移，切勿删除 marker 绕过检查。
-- **OpenCode 迁移被拒绝**：显式传 migration flag；检查仅有一个 `opencode.json` / `opencode.jsonc`，或用 `--opencode-model-config` 选择目标。不要删除 backup/audit 绕过冲突。
+- **OpenCode 迁移被拒绝**：显式传 migration flag；检查仅有一个 `opencode.json` / `opencode.jsonc`，或用 `--opencode-model-config` 选择目标。提供 registry 后模型缺失、memory compatibility probe 失败或 plugin drift 都会 fail-loud；不要删除 backup/audit 绕过冲突。
 - **OpenCode 未加载新内容**：重启 OpenCode。MCP 未配置不会阻塞本项目安装。
 
 ## 隐私、安全与平台边界
@@ -223,6 +239,7 @@ python3 -m unittest discover -s tests -v
 - MCP 服务器应只来自可信来源，并采用最小权限、受限 token 和代码审计；参见 [Cursor MCP security guidance](https://cursor.com/docs/mcp)。
 - Cursor 安装是显式 target project 的按-checkout 行为；OpenCode 和 Claude 安装是各自用户配置目录的机器级行为。脚本不管理其他全局规则、主机设置或远程服务。
 - 受管文件的 provenance/hash 用于漂移保护，不替代签名验证、备份、测试或独立安全审查。
+- 本地记忆的 telemetry 只记录 prompt hash、预测 policy、选择的 agent/skill 和结果状态；它用于评估命中率，但不能证明模型实际身份或替代运行时审计。
 
 ## 进一步阅读
 
