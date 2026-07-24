@@ -35,6 +35,64 @@ STOP_WORDS = {
     "into", "prefer", "please", "project", "remember", "summary", "summaries", "tests",
     "the", "this", "use", "with", "you",
 }
+SCHEMA_STATEMENTS = (
+    """
+    CREATE TABLE generations (
+      id INTEGER PRIMARY KEY,
+      created_at TEXT NOT NULL,
+      reason TEXT NOT NULL
+    )
+    """,
+    """
+    CREATE TABLE candidates (
+      id INTEGER PRIMARY KEY,
+      kind TEXT NOT NULL,
+      summary TEXT NOT NULL,
+      summary_hash TEXT NOT NULL UNIQUE,
+      evidence_hash TEXT NOT NULL,
+      session_hashes TEXT NOT NULL,
+      recurrence INTEGER NOT NULL,
+      state TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )
+    """,
+    """
+    CREATE TABLE memories (
+      id INTEGER PRIMARY KEY,
+      kind TEXT NOT NULL,
+      summary TEXT NOT NULL,
+      evidence_hash TEXT NOT NULL,
+      confidence REAL NOT NULL,
+      recurrence INTEGER NOT NULL,
+      sensitivity TEXT NOT NULL,
+      state TEXT NOT NULL,
+      generation INTEGER NOT NULL REFERENCES generations(id),
+      created_at TEXT NOT NULL,
+      expires_at TEXT
+    )
+    """,
+    """
+    CREATE TABLE relations (
+      source_id INTEGER NOT NULL REFERENCES memories(id),
+      target_id INTEGER NOT NULL REFERENCES memories(id),
+      relation TEXT NOT NULL,
+      PRIMARY KEY (source_id, target_id, relation)
+    )
+    """,
+    """
+    CREATE TABLE telemetry (
+      id INTEGER PRIMARY KEY,
+      prompt_hash TEXT NOT NULL,
+      predicted_policy_ids TEXT NOT NULL,
+      selected_agent TEXT NOT NULL,
+      selected_skills TEXT NOT NULL,
+      result TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    )
+    """,
+    "CREATE VIRTUAL TABLE memories_fts USING fts5(summary)",
+)
 
 
 class MemoryError(ValueError):
@@ -186,56 +244,8 @@ class MemoryStore:
                         connection.backup(destination)
                 connection.execute("BEGIN IMMEDIATE")
                 try:
-                    connection.executescript(
-                    """
-                    CREATE TABLE generations (
-                      id INTEGER PRIMARY KEY,
-                      created_at TEXT NOT NULL,
-                      reason TEXT NOT NULL
-                    );
-                    CREATE TABLE candidates (
-                      id INTEGER PRIMARY KEY,
-                      kind TEXT NOT NULL,
-                      summary TEXT NOT NULL,
-                      summary_hash TEXT NOT NULL UNIQUE,
-                      evidence_hash TEXT NOT NULL,
-                      session_hashes TEXT NOT NULL,
-                      recurrence INTEGER NOT NULL,
-                      state TEXT NOT NULL,
-                      created_at TEXT NOT NULL,
-                      updated_at TEXT NOT NULL
-                    );
-                    CREATE TABLE memories (
-                      id INTEGER PRIMARY KEY,
-                      kind TEXT NOT NULL,
-                      summary TEXT NOT NULL,
-                      evidence_hash TEXT NOT NULL,
-                      confidence REAL NOT NULL,
-                      recurrence INTEGER NOT NULL,
-                      sensitivity TEXT NOT NULL,
-                      state TEXT NOT NULL,
-                      generation INTEGER NOT NULL REFERENCES generations(id),
-                      created_at TEXT NOT NULL,
-                      expires_at TEXT
-                    );
-                    CREATE TABLE relations (
-                      source_id INTEGER NOT NULL REFERENCES memories(id),
-                      target_id INTEGER NOT NULL REFERENCES memories(id),
-                      relation TEXT NOT NULL,
-                      PRIMARY KEY (source_id, target_id, relation)
-                    );
-                    CREATE TABLE telemetry (
-                      id INTEGER PRIMARY KEY,
-                      prompt_hash TEXT NOT NULL,
-                      predicted_policy_ids TEXT NOT NULL,
-                      selected_agent TEXT NOT NULL,
-                      selected_skills TEXT NOT NULL,
-                      result TEXT NOT NULL,
-                      created_at TEXT NOT NULL
-                    );
-                    CREATE VIRTUAL TABLE memories_fts USING fts5(summary);
-                    """
-                )
+                    for statement in SCHEMA_STATEMENTS:
+                        connection.execute(statement)
                     connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
                     connection.commit()
                 except BaseException:
@@ -278,7 +288,7 @@ class MemoryStore:
         if extracted is None:
             return {"promoted": 0, "quarantined": 0, "rejected": 1}
         kind, summary, explicit = extracted
-        if kind == "project_fact" and outcome != "success":
+        if kind == "project_fact" and outcome != "completed":
             return {"promoted": 0, "quarantined": 0, "rejected": 1}
         source_hash = _hash(text)
         session_hash = _hash(session_id or source_hash)
@@ -482,6 +492,8 @@ class MemoryStore:
             raise MemoryError("telemetry policy identifiers are invalid")
         if not re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", selected_agent):
             raise MemoryError("telemetry agent identifier is invalid")
+        if result not in {"observed", "completed", "failed"}:
+            raise MemoryError("telemetry result is invalid")
         with closing(self._connect()) as connection:
             connection.execute("BEGIN IMMEDIATE")
             try:

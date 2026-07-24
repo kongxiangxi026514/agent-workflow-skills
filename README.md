@@ -114,7 +114,7 @@ OpenCode 默认使用 `$HOME/.config/opencode`；可用 `-OpenCodeConfigDir` / `
   --enable-local-memory --opencode-bin opencode
 ```
 
-OpenCode binding 位于 `<config-dir>/agent-workflow-skills/model-routing.jsonc`。为保护已有配置，默认安装会 fail-loud；只有带迁移 opt-in 才读取并修改一个选定的 `opencode.json` / `opencode.jsonc`。`-OpenCodeModelConfig` / `--opencode-model-config` 可显式选择其一；否则仅在恰好一个存在时自动选择，都不存在时新建 `opencode.jsonc`，两个同时存在时拒绝。`-AvailableOpenCodeModel` / `--available-opencode-model` 可重复传入当前 `opencode models` 的完整清单；提供时安装器必须验证 build/effective-reason/review 三者均可用，绝不 fallback。reason 和 review 均为 fail-closed 只读角色：未知工具、edit、bash、task 和外部目录都会被拒绝。迁移只退休 marker+hash 同时证明属于 bundle 的同名角色 Markdown；**自定义 OpenCode Markdown agent 从不被改写**。迁移使用排他 lock 和尽力的 no-follow/reparse identity 检查来防御正常并发；同一 OS 用户能在检查与提交之间恶意替换目录的场景超出此纯 Python 跨平台机制的安全保证。
+OpenCode binding 位于 `<config-dir>/agent-workflow-skills/model-routing.jsonc`。为保护已有配置，默认安装会 fail-loud；只有带迁移 opt-in 才读取并修改一个选定的 `opencode.json` / `opencode.jsonc`。`-OpenCodeModelConfig` / `--opencode-model-config` 可显式选择其一；否则仅在恰好一个存在时自动选择，都不存在时新建 `opencode.jsonc`，两个同时存在时拒绝。`-AvailableOpenCodeModel` / `--available-opencode-model` 可重复传入当前 `opencode models` 的完整清单；提供时安装器必须验证 build/effective-reason/review 三者均可用，绝不 fallback。reason 和 review 写入 `*: deny` 的 fail-closed policy，仅显式允许只读读/搜/skill 能力；实际 host enforcement 仍由 OpenCode 负责。迁移只退休 marker+hash 同时证明属于 bundle 的同名角色 Markdown；**自定义 OpenCode Markdown agent 从不被改写**。迁移使用排他 lock 和尽力的 no-follow/reparse identity 检查来防御正常并发；同一 OS 用户能在检查与提交之间恶意替换目录的场景超出此纯 Python 跨平台机制的安全保证。
 
 ### OpenCode 可选本地记忆
 
@@ -172,7 +172,7 @@ git pull --ff-only origin main
 
 ### 卸载
 
-卸载只移除 ownership state 或 marker 证明属于本项目的文件；OpenCode 仅删除 audit 中仍与受管值一致的 `agent.build/reason/review` 字段和本包安装的本地 memory plugin，绝不恢复或写回旧的 Markdown `model:` 硬编码。本地记忆数据库默认保留；使用 `local_memory_rollback` 工具回滚 generation，或在确认后手动删除 OS data-dir 的 namespace。
+卸载只移除 ownership state 或 marker 证明属于本项目的文件；OpenCode 仅删除 audit 中仍与受管值一致的 `agent.build/reason/review` 字段和本包安装的本地 memory plugin，绝不恢复或写回旧的 Markdown `model:` 硬编码。本地记忆数据库默认保留；操作员只能通过 `local_memory.py rollback` 显式指定 generation 回滚，或在确认后手动删除 OS data-dir 的 namespace。
 
 ```powershell
 .\uninstall.ps1 -Tool cursor -Project "D:\src\my-project"

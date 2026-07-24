@@ -40,7 +40,7 @@ function memoryArgs(command: string, scope: "global" | "project", worktree: stri
 async function invoke(
   command: string,
   payload: Record<string, unknown>,
-  scope: "global",
+  scope: "global" | "project",
   worktree: string,
 ): Promise<Record<string, unknown>> {
   const child = Bun.spawn(memoryArgs(command, scope, worktree), {
@@ -121,8 +121,8 @@ export const AgentWorkflowLocalMemory = async (ctx: PluginContext) => ({
       captureInFlight.add(sessionID)
       try {
         await Promise.all([
-          invoke("capture", { text, session_id: sessionID, outcome: "success" }, "global", ctx.worktree),
-          invoke("capture", { text, session_id: sessionID, outcome: "success" }, "project", ctx.worktree),
+          invoke("capture", { text, session_id: sessionID, outcome: "completed" }, "global", ctx.worktree),
+          invoke("capture", { text, session_id: sessionID, outcome: "completed" }, "project", ctx.worktree),
         ])
       } catch {
         // Memory must fail closed and never block an OpenCode session.
@@ -170,24 +170,6 @@ export const AgentWorkflowLocalMemory = async (ctx: PluginContext) => ({
           invoke("status", {}, "project", ctx.worktree),
         ])
         return JSON.stringify({ global, project })
-      },
-    }),
-    local_memory_rollback: tool({
-      description: "Roll a local memory namespace back to a verified generation.",
-      args: {
-        scope: tool.schema.string(),
-        generation: tool.schema.string(),
-      },
-      async execute(args: { scope: string; generation: string }) {
-        if (args.scope !== "global" && args.scope !== "project") {
-          throw new Error("scope must be global or project")
-        }
-        if (!/^\d+$/.test(args.generation)) {
-          throw new Error("generation must be a non-negative integer")
-        }
-        return JSON.stringify(
-          await invoke("rollback", { generation: Number(args.generation) }, args.scope, ctx.worktree),
-        )
       },
     }),
   },

@@ -635,6 +635,7 @@ def _audit_payload(
     binding: Path,
     config_after: bytes,
     local_memory_plugin_added: bool,
+    permission_baseline: dict,
 ) -> dict:
     files = []
     for change in changes:
@@ -660,8 +661,44 @@ def _audit_payload(
         "binding_sha256": _sha256(binding.read_bytes()),
         "config_sha256": _sha256(config_after),
         "local_memory_plugin_added": local_memory_plugin_added,
+        "permission_baseline": permission_baseline,
         "files": files,
     }
+
+
+def _permission_baseline(data: dict, audit: Path) -> dict:
+    if audit.is_file():
+        try:
+            previous = parse_jsonc(audit.read_bytes().decode("utf-8-sig"))
+        except (OSError, UnicodeError, ValueError, json.JSONDecodeError) as error:
+            raise MigrationError(f"invalid previous OpenCode migration audit: {error}") from error
+        baseline = previous.get("permission_baseline") if isinstance(previous, dict) else None
+        if baseline is not None:
+            _validate_permission_baseline(baseline)
+            return copy.deepcopy(baseline)
+    roles = data.get("agent", {})
+    baseline = {}
+    for role in ("reason", "review"):
+        current = roles.get(role, {}) if isinstance(roles, dict) else {}
+        present = isinstance(current, dict) and "permission" in current
+        baseline[role] = {
+            "present": present,
+            "value": copy.deepcopy(current.get("permission")) if present else None,
+        }
+    return baseline
+
+
+def _validate_permission_baseline(baseline: object) -> None:
+    if not isinstance(baseline, dict) or set(baseline) != {"reason", "review"}:
+        raise MigrationError("invalid OpenCode permission baseline")
+    for value in baseline.values():
+        if (
+            not isinstance(value, dict)
+            or not isinstance(value.get("present"), bool)
+            or (value["present"] and not isinstance(value.get("value"), (dict, str)))
+            or (not value["present"] and value.get("value") is not None)
+        ):
+            raise MigrationError("invalid OpenCode permission baseline")
 
 
 def _backup_id(value: str | None) -> str:
@@ -712,6 +749,7 @@ def build_migration_plan(
     selected = select_config(base, explicit)
     _assert_tree_no_reparse(base, selected.parent)
     data = _read_jsonc_object(selected)
+    permission_baseline = _permission_baseline(data, audit)
     models = _models(binding, available_models)
     updated, managed_hashes, local_memory_plugin_added = _config_after_migration(
         data, models, enable_local_memory
@@ -737,6 +775,7 @@ def build_migration_plan(
             binding,
             config_after,
             local_memory_plugin_added,
+            permission_baseline,
         )
         audit_after = (json.dumps(payload, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
         existing_audit = audit.read_bytes() if audit.exists() else None
@@ -1072,7 +1111,7 @@ def _failure_injection(value: int | None) -> int | None:
     return injected
 
 
-def _validate_audit(audit: dict) -> tuple[str, dict, bool]:
+def _validate_audit(audit: dict) -> tuple[str, dict, bool, dict]:
     if audit.get("bundle") != BUNDLE or audit.get("version") != AUDIT_VERSION:
         raise MigrationError("unrecognized OpenCode model migration audit")
     config = audit.get("config")
@@ -1090,7 +1129,13 @@ def _validate_audit(audit: dict) -> tuple[str, dict, bool]:
     memory_plugin_added = audit.get("local_memory_plugin_added", False)
     if not isinstance(memory_plugin_added, bool):
         raise MigrationError("invalid OpenCode local-memory plugin audit")
-    return config, model_hashes, memory_plugin_added
+    permission_baseline = audit.get("permission_baseline")
+    if permission_baseline is None:
+        permission_baseline = {
+            role: {"present": False, "value": None} for role in ("reason", "review")
+        }
+    _validate_permission_baseline(permission_baseline)
+    return config, model_hashes, memory_plugin_added, permission_baseline
 
 
 def _memory_uninstall_changes(
@@ -1138,7 +1183,7 @@ def uninstall(base: Path, audit_path: Path, *, check: bool = False) -> None:
         audit = parse_jsonc(audit_path.read_bytes().decode("utf-8-sig"))
     except (OSError, UnicodeError, ValueError, json.JSONDecodeError) as error:
         raise MigrationError(f"invalid OpenCode model migration audit: {error}") from error
-    config_relative, model_hashes, memory_plugin_added = _validate_audit(audit)
+    config_relative, model_hashes, memory_plugin_added, permission_baseline = _validate_audit(audit)
     config = _assert_safe_path(base, base / config_relative)
     if config.name not in {"opencode.json", "opencode.jsonc"} or not config.exists():
         raise MigrationError("managed OpenCode config is missing or invalid")
@@ -1160,6 +1205,12 @@ def uninstall(base: Path, audit_path: Path, *, check: bool = False) -> None:
     for role in model_hashes:
         current = roles[role]
         del current["model"]
+        if role in permission_baseline and current.get("permission") == ROLE_FIELDS[role].get("permission"):
+            original = permission_baseline[role]
+            if original["present"]:
+                current["permission"] = copy.deepcopy(original["value"])
+            else:
+                current.pop("permission", None)
         if not current:
             del roles[role]
     if not roles:

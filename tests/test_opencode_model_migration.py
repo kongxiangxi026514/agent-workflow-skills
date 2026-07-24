@@ -209,18 +209,7 @@ class OpenCodeModelMigrationTests(unittest.TestCase):
         self.assertEqual(cleaned["agent"]["reason"]["description"], "user changed")
         self.assertNotIn("model", cleaned["agent"]["reason"])
         self.assertNotIn("model", cleaned["agent"]["review"])
-        self.assertEqual(
-            cleaned["agent"]["review"]["permission"],
-            {
-                "*": "deny",
-                "read": "allow",
-                "glob": "allow",
-                "grep": "allow",
-                "list": "allow",
-                "lsp": "allow",
-                "skill": "allow",
-            },
-        )
+        self.assertNotIn("permission", cleaned["agent"]["review"])
 
     def test_uninstall_rejects_role_model_drift_without_mutation(self):
         config = self.base / "opencode.json"
@@ -440,7 +429,7 @@ class OpenCodeModelMigrationTests(unittest.TestCase):
         result = self.invoke()
         self.assertEqual(result.returncode, 0, result.stderr.decode("utf-8", "replace"))
 
-    def test_existing_role_fields_are_preserved_and_review_permission_conflicts(self):
+    def test_existing_role_fields_and_permissions_are_restored(self):
         config = self.base / "opencode.json"
         original = {
             "agent": {
@@ -477,6 +466,17 @@ class OpenCodeModelMigrationTests(unittest.TestCase):
             },
         )
         self.assertEqual(migrated["agent"]["reason"]["mode"], "subagent")
+        self.binding.write_text(
+            json.dumps(
+                {
+                    "build": "sample/build-v2",
+                    "reason": None,
+                    "review": "sample/review-v2",
+                }
+            ),
+            encoding="utf-8",
+        )
+        self.assertEqual(self.invoke().returncode, 0)
 
         result = self.invoke("--uninstall")
         self.assertEqual(result.returncode, 0, result.stderr.decode("utf-8", "replace"))
@@ -485,15 +485,7 @@ class OpenCodeModelMigrationTests(unittest.TestCase):
         self.assertEqual(cleaned["agent"]["build"]["custom"], {"nested": True})
         self.assertEqual(
             cleaned["agent"]["review"]["permission"],
-            {
-                "*": "deny",
-                "read": "allow",
-                "glob": "allow",
-                "grep": "allow",
-                "list": "allow",
-                "lsp": "allow",
-                "skill": "allow",
-            },
+            {"bash": "ask", "prompt": "keep"},
         )
 
         self.temp.cleanup()

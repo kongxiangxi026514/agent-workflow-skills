@@ -82,14 +82,14 @@ Cursor 全局 skills 是跨项目共享资产：安装器只按 `policy-v3/gener
 
 - `policy-v3/generated/skills/` → `~/.config/opencode/skills/<skill>/SKILL.md`。
 - 脊柱正文(已剥离 `.mdc` frontmatter)幂等注入 `~/.config/opencode/AGENTS.md`(全局始终加载),用 `<!-- BEGIN agent-workflow-skills spine -->` / `<!-- END agent-workflow-skills spine -->` 标记块包裹。
-- 首次安装用 CLI 明确给 `build` 与 `review`;`reason` 省略即以 JSONC `null` 复用 build。角色配置写入 OpenCode 主配置 `agent` 映射，而不是 bundle Markdown role agent；未命名的 Markdown agent 保持自己的 frontmatter，不会被安装器改写。之后编辑 `<config-dir>/agent-workflow-skills/model-routing.jsonc` 并带相同 migration flag 重跑，三个角色的 JSON 字段会刷新；reason/review 均为 fail-closed 只读权限，拒绝未知工具、edit、bash、task 和外部目录。
+- 首次安装用 CLI 明确给 `build` 与 `review`;`reason` 省略即以 JSONC `null` 复用 build。角色配置写入 OpenCode 主配置 `agent` 映射，而不是 bundle Markdown role agent；未命名的 Markdown agent 保持自己的 frontmatter，不会被安装器改写。之后编辑 `<config-dir>/agent-workflow-skills/model-routing.jsonc` 并带相同 migration flag 重跑，三个角色的 JSON 字段会刷新；reason/review 写入 `*: deny`，仅显式允许只读读/搜/skill 能力，实际 enforcement 由 OpenCode host 负责。
 - 默认 config dir 是字面 `~/.config/opencode`;覆盖参数同时适用于 install/uninstall。默认不改主配置并 fail-loud；`--migrate-opencode-model-config` / `-MigrateOpenCodeModelConfig` 是唯一 opt-in。`--opencode-model-config` / `-OpenCodeModelConfig` 可选择 `opencode.json` 或 `opencode.jsonc`；未指定时只能使用唯一现存文件，无文件时创建 JSONC，双文件或损坏内容均拒绝且不改写。
 - 迁移保留非模型 JSON 语义，将原字节备份到 `<config-dir>/agent-workflow-skills/migration-backups/`，并在 `opencode-model-migration.json` 记录前后 SHA-256、binding/config digest 和 role model hash（不记录模型 ID）。它递归检查 `agent/` 与 `agents/`，只会移走 state hash 与 marker 同时证明属于旧 bundle 的命名 role Markdown；同名自定义 agent 会 fail-loud，用户必须先手动重命名或迁移。两个根目录出现同一个规范化 agent 名称也会 fail-loud；其余自定义 OpenCode Markdown agent 原样保留。提供 `-AvailableOpenCodeModel` / `--available-opencode-model` 时，build/effective-reason/review 必须全部在清单中。全部 UTF-8 无 BOM;先临时 staging/校验再替换目标,失败校验不改变既有 bundle 状态。完成后必须重启 OpenCode。
 
 ### 本地记忆安全边界
 
 - `-EnableLocalMemory` / `--enable-local-memory` 是唯一启用入口；安装前运行 OpenCode 兼容性 probe，不通过则不写任何配置。
-- SQLite 使用 WAL、full synchronous、独立 global/project namespace、generation rollback 和 bounded FTS5 retrieval；`local_memory_rollback` 只回滚数据库记忆。
+- SQLite 使用 WAL、full synchronous、独立 global/project namespace、generation rollback 和 bounded FTS5 retrieval；只有操作员可通过 `local_memory.py rollback` 回滚数据库记忆。
 - 不保存原始对话、代码或工具输出，只保存脱敏摘要、置信度、重复次数和证据 hash；秘密、冲突、低置信度候选不进入 active context。
 - 自动更新仅更新 memory 数据；不自动修改 `AGENTS.md`、策略、路由词表、模型、权限或 workflow 源码。
 

@@ -12,7 +12,7 @@ Portable policy defines roles only; each installation keeps concrete IDs in its 
 - Cursor and OpenCode bindings are separate. An `all` install rejects generic model options that could cross the platform boundary.
 - Cursor resolves IDs only from its machine-local JSONC binding. OpenCode resolves its native role IDs from the selected JSON/JSONC `agent.build`, `agent.reason`, and `agent.review` entries after an explicit audited migration.
 - Unnamed OpenCode Markdown agents retain their own frontmatter and configuration. The migration retires only marker-and-hash verified bundle role-agent Markdown files from discovery; users must manually rename or migrate a custom same-name role agent.
-- OpenCode `reason` and `review` are fail-closed read-only roles: unknown tools, edit, bash, task and external-directory access are denied. Provide `-AvailableOpenCodeModel` / `--available-opencode-model` when a runtime registry is available; every build/effective-reason/review ID must be present or installation fails without fallback.
+- OpenCode `reason` and `review` write `*: deny` plus an explicit read/glob/grep/list/lsp/skill allowlist. This is the bundle's configured policy, while actual host enforcement remains OpenCode's responsibility. Provide `-AvailableOpenCodeModel` / `--available-opencode-model` when a runtime registry is available; every build/effective-reason/review ID must be present or installation fails without fallback.
 - Before every native dispatch, use the installed `dispatch_resolver.py`, validate an exposed model registry, pass its exact native arguments, and retain the evidence receipt.
 
 ## Cursor review and telemetry boundary

@@ -77,10 +77,10 @@ class LocalMemoryTests(unittest.TestCase):
         active = self.store("project", project_a)
         for session in ("one", "two"):
             self.assertEqual(
-                active.capture(text, session_id=session, outcome="success")["promoted"], 0
+                active.capture(text, session_id=session, outcome="completed")["promoted"], 0
             )
         self.assertEqual(
-            active.capture(text, session_id="three", outcome="success")["promoted"], 1
+            active.capture(text, session_id="three", outcome="completed")["promoted"], 1
         )
         self.assertEqual(len(active.search("focused tests", limit=5)), 1)
         self.assertEqual(self.store("global").search("focused tests", limit=5), [])
@@ -188,6 +188,38 @@ class LocalMemoryTests(unittest.TestCase):
 
         self.assertEqual(store.status()["active"], 0)
         self.assertEqual(store.status()["generation"], 0)
+
+    def test_failed_schema_initialization_leaves_no_partial_tables(self):
+        original = self.memory.SCHEMA_STATEMENTS
+        self.memory.SCHEMA_STATEMENTS = (*original[:2], "CREATE TABLE", *original[2:])
+        try:
+            with self.assertRaises(sqlite3.OperationalError):
+                self.store()
+        finally:
+            self.memory.SCHEMA_STATEMENTS = original
+
+        database = self.root / "memory" / "global" / "global.sqlite3"
+        connection = sqlite3.connect(database)
+        try:
+            tables = connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            ).fetchall()
+            self.assertEqual(tables, [])
+            self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 0)
+        finally:
+            connection.close()
+
+    def test_telemetry_rejects_raw_result_content(self):
+        store = self.store()
+        with self.assertRaises(self.memory.MemoryError):
+            store.record_telemetry(
+                "prompt",
+                predicted_policy_ids=[],
+                selected_agent="build",
+                selected_skills=[],
+                result="LEAK-CANARY",
+            )
+        self.assertEqual(store.status()["telemetry"], 0)
 
 
 if __name__ == "__main__":
