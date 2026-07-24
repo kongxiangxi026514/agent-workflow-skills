@@ -461,6 +461,10 @@ class MemoryStore:
         with closing(self._connect()) as connection:
             connection.execute("BEGIN IMMEDIATE")
             try:
+                rolled_back = connection.execute(
+                    "SELECT kind, summary FROM memories WHERE generation > ? AND state = 'active'",
+                    (generation,),
+                ).fetchall()
                 connection.execute(
                     "UPDATE memories SET state = 'rolled_back' WHERE generation > ? AND state = 'active'",
                     (generation,),
@@ -476,6 +480,11 @@ class MemoryStore:
                     """,
                     (generation, generation),
                 )
+                for row in rolled_back:
+                    connection.execute(
+                        "UPDATE candidates SET state = 'collecting' WHERE summary_hash = ?",
+                        (_hash(f"{row['kind']}\0{row['summary'].casefold()}"),),
+                    )
                 self._rebuild_fts(connection)
                 connection.commit()
             except BaseException:

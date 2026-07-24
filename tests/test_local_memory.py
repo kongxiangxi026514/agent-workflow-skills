@@ -245,6 +245,19 @@ class LocalMemoryTests(unittest.TestCase):
         )
         self.assertEqual(store.status()["active"], 1)
 
+    def test_rollback_rearms_a_promoted_candidate(self):
+        store = self.store()
+        text = "I prefer rollback-safe writes."
+        store.capture(text, session_id="one", outcome="pending")
+
+        store.rollback(0)
+
+        self.assertEqual(store.status()["active"], 0)
+        self.assertEqual(
+            store.capture(text, session_id="two", outcome="pending")["promoted"], 1
+        )
+        self.assertEqual(store.status()["active"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()
