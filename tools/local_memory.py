@@ -300,6 +300,9 @@ class MemoryStore:
                     "SELECT * FROM candidates WHERE summary_hash = ?", (summary_hash,)
                 ).fetchone()
                 if row:
+                    if row["state"] == "promoted":
+                        connection.commit()
+                        return {"promoted": 0, "quarantined": 0, "rejected": 0}
                     hashes = set(json.loads(row["session_hashes"]))
                     hashes.add(session_hash)
                     recurrence = len(hashes)
@@ -492,6 +495,16 @@ class MemoryStore:
             raise MemoryError("telemetry policy identifiers are invalid")
         if not re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", selected_agent):
             raise MemoryError("telemetry agent identifier is invalid")
+        if (
+            not isinstance(selected_skills, list)
+            or len(selected_skills) > 16
+            or not all(
+                isinstance(skill, str)
+                and re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", skill)
+                for skill in selected_skills
+            )
+        ):
+            raise MemoryError("telemetry skill identifiers are invalid")
         if result not in {"observed", "completed", "failed"}:
             raise MemoryError("telemetry result is invalid")
         with closing(self._connect()) as connection:

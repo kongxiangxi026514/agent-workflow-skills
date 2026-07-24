@@ -221,6 +221,30 @@ class LocalMemoryTests(unittest.TestCase):
             )
         self.assertEqual(store.status()["telemetry"], 0)
 
+    def test_telemetry_rejects_unbounded_skill_identifiers(self):
+        store = self.store()
+        with self.assertRaises(self.memory.MemoryError):
+            store.record_telemetry(
+                "prompt",
+                predicted_policy_ids=[],
+                selected_agent="build",
+                selected_skills=["x" * 81],
+                result="observed",
+            )
+        self.assertEqual(store.status()["telemetry"], 0)
+
+    def test_completed_session_does_not_duplicate_explicit_preference(self):
+        store = self.store()
+        text = "I prefer concise implementation summaries."
+
+        self.assertEqual(
+            store.capture(text, session_id="one", outcome="pending")["promoted"], 1
+        )
+        self.assertEqual(
+            store.capture(text, session_id="one", outcome="completed")["promoted"], 0
+        )
+        self.assertEqual(store.status()["active"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()
