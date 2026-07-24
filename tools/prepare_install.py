@@ -45,6 +45,22 @@ def _binding(path, supplied, platform):
     return data, (build, effective_reason, review)
 
 
+def _existing_memory_enabled(binding_path):
+    state_path = binding_path.parent / "install-state.json"
+    if not state_path.is_file():
+        return False
+    try:
+        state = parse_jsonc(state_path.read_bytes().decode("utf-8-sig"))
+    except (OSError, UnicodeError, ValueError, json.JSONDecodeError) as error:
+        raise ValueError(f"invalid existing ownership state: {error}") from error
+    return bool(
+        isinstance(state, dict)
+        and state.get("bundle") == "agent-workflow-skills"
+        and state.get("platform") == "opencode"
+        and state.get("local_memory_enabled") is True
+    )
+
+
 def _hash(path):
     """Return the content digest recorded in the owned-artifact manifest."""
     return hashlib.sha256(path.read_bytes()).hexdigest()
@@ -69,11 +85,16 @@ def _adapter_source(platform, profile):
     return ROOT / "policy-v3" / "generated" / "adapters" / platform / profile / name
 
 
-def _stage(stage, binding_path, platform, profile, supplied):
+def _stage(stage, binding_path, platform, profile, supplied, local_memory=False):
     if platform == "claude":
         data, models = None, ()
     else:
         data, models = _binding(binding_path, supplied, platform)
+    if local_memory and platform != "opencode":
+        raise ValueError("local memory can only be staged for OpenCode")
+    local_memory = local_memory or (
+        platform == "opencode" and _existing_memory_enabled(binding_path)
+    )
     drift = detect_drift(ROOT, expected_outputs(ROOT))
     if drift:
         raise ValueError(f"generated policy artifacts drifted: {', '.join(drift)}")
@@ -90,6 +111,13 @@ def _stage(stage, binding_path, platform, profile, supplied):
         (stage / "model-routing.jsonc").write_text(binding_text, encoding="utf-8", newline="\n")
         for name in ("dispatch_resolver.py", "validate_jsonc.py"):
             shutil.copy2(ROOT / "tools" / name, stage / name)
+    if local_memory:
+        plugin_dir = stage / "plugins"
+        plugin_dir.mkdir()
+        shutil.copy2(ROOT / "opencode" / "agent-workflow-memory.ts", plugin_dir)
+        shutil.copy2(ROOT / "opencode" / "local-memory-contract.json", plugin_dir)
+        for name in ("local_memory.py", "verify_opencode_memory_plugin.py"):
+            shutil.copy2(ROOT / "tools" / name, stage / name)
     policy_owned = [stage / "workflow-gate.mdc", *(stage / "skills").glob("*/SKILL.md")]
     owned = [*policy_owned]
     if platform != "claude":
@@ -99,6 +127,13 @@ def _stage(stage, binding_path, platform, profile, supplied):
             stage / "model-routing.jsonc",
             stage / "dispatch_resolver.py",
             stage / "validate_jsonc.py",
+        ))
+    if local_memory:
+        owned.extend((
+            stage / "local_memory.py",
+            stage / "verify_opencode_memory_plugin.py",
+            stage / "plugins" / "agent-workflow-memory.ts",
+            stage / "plugins" / "local-memory-contract.json",
         ))
     state = {
         "bundle": "agent-workflow-skills",
@@ -114,6 +149,8 @@ def _stage(stage, binding_path, platform, profile, supplied):
         state["spine_block_sha256"] = hashlib.sha256(
             _spine_block(stage / "workflow-gate.mdc")
         ).hexdigest()
+    if local_memory:
+        state["local_memory_enabled"] = True
     (stage / "install-state.json").write_text(json.dumps(state, indent=2) + "\n", encoding="utf-8", newline="\n")
     portable = [stage / "workflow-gate.mdc", *(stage / "skills").glob("*/SKILL.md")]
     text = "\n".join(path.read_text(encoding="utf-8").lower() for path in portable)
@@ -124,14 +161,19 @@ def _stage(stage, binding_path, platform, profile, supplied):
 
 def main():
     try:
-        if len(sys.argv) != 8:
-            raise ValueError("usage: prepare_install.py STAGE BINDING PLATFORM PROFILE BUILD REASON REVIEW")
+        if len(sys.argv) not in {8, 9} or (
+            len(sys.argv) == 9 and sys.argv[8] != "--enable-local-memory"
+        ):
+            raise ValueError(
+                "usage: prepare_install.py STAGE BINDING PLATFORM PROFILE BUILD REASON REVIEW [--enable-local-memory]"
+            )
         _stage(
             Path(sys.argv[1]),
             Path(sys.argv[2]),
             sys.argv[3],
             sys.argv[4],
             tuple(sys.argv[5:8]),
+            local_memory=len(sys.argv) == 9,
         )
     except (OSError, UnicodeError, ValueError, json.JSONDecodeError) as error:
         print(f"Invalid model binding or bundle artifact: {error}", file=sys.stderr)

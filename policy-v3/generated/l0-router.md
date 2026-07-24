@@ -1,4 +1,4 @@
-<!-- GENERATED; policy_id=P00; source=policy-v3/fragments/l0-router.md; source_sha256=602b34a8f3289eefcc501a40e12eeff8b823c24d4d08ea11979f5a857f725b5f; registry_sha256=a0f339fcdd0ef7577e2f20f614ca1a2c3408ca5591f3bd3690710a9b3963e1a9 -->
+<!-- GENERATED; policy_id=P00; source=policy-v3/fragments/l0-router.md; source_sha256=602b34a8f3289eefcc501a40e12eeff8b823c24d4d08ea11979f5a857f725b5f; registry_sha256=57d781f3619d79152b7a501ea52993e677b977bb9c48115e97328a4a2306b5d0 -->
 
 # Workflow Risk Router
 

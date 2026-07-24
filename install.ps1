@@ -31,7 +31,10 @@ param(
     [string]$CursorReviewModel,
     [string]$OpenCodeBuildModel,
     [string]$OpenCodeReasonModel,
-    [string]$OpenCodeReviewModel
+    [string]$OpenCodeReviewModel,
+    [string[]]$AvailableOpenCodeModel,
+    [switch]$EnableLocalMemory,
+    [string]$OpenCodeBin = 'opencode'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -99,13 +102,15 @@ function Get-Profile([string]$Platform) {
     return 'balanced'
 }
 
-function New-InstallStage([string]$Binding, [string]$Platform, [string]$InstallProfile, [string[]]$Models) {
+function New-InstallStage([string]$Binding, [string]$Platform, [string]$InstallProfile, [string[]]$Models, [bool]$EnableMemory) {
     $stage = Join-Path ([IO.Path]::GetTempPath()) "agent-workflow-$([guid]::NewGuid().ToString('N'))"
     $python = Resolve-Python
     $build = if ($Models[0]) { $Models[0] } else { '-' }
     $reason = if ($Models[1]) { $Models[1] } else { '-' }
     $review = if ($Models[2]) { $Models[2] } else { '-' }
-    & $python (Join-Path $RepoRoot 'tools\prepare_install.py') $stage $Binding $Platform $InstallProfile $build $reason $review | Out-Null
+    $arguments = @((Join-Path $RepoRoot 'tools\prepare_install.py'), $stage, $Binding, $Platform, $InstallProfile, $build, $reason, $review)
+    if ($EnableMemory) { $arguments += '--enable-local-memory' }
+    & $python @arguments | Out-Null
     if ($LASTEXITCODE -ne 0) {
         if (Test-Path $stage) { Remove-Item -Recurse -Force $stage }
         throw "Model binding validation failed. Nothing was installed."
@@ -255,9 +260,27 @@ function Test-OpenCodeModelMigration([string]$Binding) {
         '--check'
     )
     if ($OpenCodeModelConfig) { $migration += @('--opencode-model-config', $OpenCodeModelConfig) }
+    foreach ($model in $AvailableOpenCodeModel) { $migration += @('--available-model', $model) }
+    if (Test-Path -LiteralPath (Join-Path $script:OpenCodeStage 'plugins\agent-workflow-memory.ts')) {
+        $migration += '--enable-local-memory'
+    }
     & $python @migration | Out-Null
     if ($LASTEXITCODE -ne 0) {
         throw 'OpenCode model config migration preflight failed. Nothing was installed.'
+    }
+}
+
+function Test-OpenCodeMemoryCompatibility {
+    $plugin = Join-Path $script:OpenCodeStage 'plugins\agent-workflow-memory.ts'
+    if (-not (Test-Path -LiteralPath $plugin)) { return }
+    $python = Resolve-Python
+    & $python (Join-Path $script:OpenCodeStage 'verify_opencode_memory_plugin.py') `
+        '--plugin' $plugin `
+        '--contract' (Join-Path $script:OpenCodeStage 'plugins\local-memory-contract.json') `
+        '--opencode-bin' $OpenCodeBin `
+        '--require-runtime' | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        throw 'OpenCode local-memory compatibility probe failed. Nothing was installed.'
     }
 }
 
@@ -287,12 +310,19 @@ function Install-OpenCode {
         '--stage', $script:OpenCodeStage
     )
     if ($OpenCodeModelConfig) { $migration += @('--opencode-model-config', $OpenCodeModelConfig) }
+    foreach ($model in $AvailableOpenCodeModel) { $migration += @('--available-model', $model) }
+    if (Test-Path -LiteralPath (Join-Path $script:OpenCodeStage 'plugins\agent-workflow-memory.ts')) {
+        $migration += '--enable-local-memory'
+    }
     & $python @migration | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'OpenCode installation transaction failed; OpenCode config changes were rolled back.' }
     $summary.Add("opencode: skills -> $(Join-Path $base 'skills')")
     $summary.Add("opencode: spine injected -> $(Join-Path $base 'AGENTS.md') (marker block)")
     $summary.Add("opencode: model binding -> $base\agent-workflow-skills\model-routing.jsonc")
     $summary.Add("opencode: role models -> selected JSON/JSONC config (audited migration)")
+    if (Test-Path -LiteralPath (Join-Path $script:OpenCodeStage 'plugins\agent-workflow-memory.ts')) {
+        $summary.Add("opencode: local-only transactional memory plugin enabled")
+    }
 }
 
 function Install-Claude {
@@ -349,7 +379,8 @@ if ($Tool -eq 'opencode' -or $Tool -eq 'all') {
     Test-SpineMarkerIntegrity $opencodeSpine
     Test-PolicyArtifactOwnership $opencodeState $opencodeSpine (Join-Path $OpenCodeBase 'skills') $true
     $models = @($OpenCodeBuildModel, $OpenCodeReasonModel, $OpenCodeReviewModel)
-    $script:OpenCodeStage = New-InstallStage (Join-Path $OpenCodeBase 'agent-workflow-skills\model-routing.jsonc') 'opencode' (Get-Profile 'opencode') $models
+    $script:OpenCodeStage = New-InstallStage (Join-Path $OpenCodeBase 'agent-workflow-skills\model-routing.jsonc') 'opencode' (Get-Profile 'opencode') $models $EnableLocalMemory
+    Test-OpenCodeMemoryCompatibility
     Test-OpenCodeModelMigration (Join-Path $script:OpenCodeStage 'model-routing.jsonc')
 }
 if ($Tool -eq 'cursor' -or $Tool -eq 'all') {
@@ -366,7 +397,7 @@ if ($Tool -eq 'cursor' -or $Tool -eq 'all') {
         }
     }
     $models = @($CursorBuildModel, $CursorReasonModel, $CursorReviewModel)
-    $script:CursorStage = New-InstallStage $cursorBinding 'cursor' (Get-Profile 'cursor') $models
+    $script:CursorStage = New-InstallStage $cursorBinding 'cursor' (Get-Profile 'cursor') $models $false
 }
 if ($Tool -eq 'claude' -or $Tool -eq 'all') {
     $claudeBase = Join-Path $env:USERPROFILE '.claude'
@@ -374,7 +405,7 @@ if ($Tool -eq 'claude' -or $Tool -eq 'all') {
     Test-SpineMarkerIntegrity (Join-Path $claudeBase 'CLAUDE.md')
     Test-SkillOwnership (Join-Path $claudeBase 'skills')
     Test-PolicyArtifactOwnership $claudeState (Join-Path $claudeBase 'CLAUDE.md') (Join-Path $claudeBase 'skills') $true
-    $script:ClaudeStage = New-InstallStage (Join-Path $claudeBase 'agent-workflow-skills\model-routing.jsonc') 'claude' (Get-Profile 'claude') @()
+    $script:ClaudeStage = New-InstallStage (Join-Path $claudeBase 'agent-workflow-skills\model-routing.jsonc') 'claude' (Get-Profile 'claude') @() $false
 }
 
 try {

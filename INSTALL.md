@@ -60,6 +60,7 @@ Cursor 全局 skills 是跨项目共享资产：安装器只按 `policy-v3/gener
 | OpenCode | `policy-v3/generated/skills/`（6 个） | `~/.config/opencode/skills/<skill>/` |
 | OpenCode | `rules/workflow-gate.mdc` | `~/.config/opencode/AGENTS.md` 标记块 |
 | OpenCode | binding + resolver + ownership state | `~/.config/opencode/agent-workflow-skills/{model-routing.jsonc,dispatch_resolver.py,install-state.json}` |
+| OpenCode（可选本地记忆） | plugin + Python SQLite runtime | `<config-dir>/plugins/agent-workflow-memory.ts` 与 `<config-dir>/agent-workflow-skills/local_memory.py`；数据库位于 OS data dir |
 | OpenCode（显式迁移） | 选定 `opencode.json` / `opencode.jsonc` | `agent.{build,reason,review}`；原字节 backup 和 SHA-256 audit 写入 `agent-workflow-skills/` |
 | Claude | `policy-v3/generated/{skills,adapters/claude}` | `~/.claude/skills/<skill>/` + `~/.claude/CLAUDE.md` 标记块 + `~/.claude/agent-workflow-skills/install-state.json` |
 
@@ -70,7 +71,9 @@ Cursor 全局 skills 是跨项目共享资产：安装器只按 `policy-v3/gener
 ```bash
 ./install.sh --tool opencode \
   --migrate-opencode-model-config \
-  --build-model provider/build-id --review-model other/review-id
+  --build-model provider/build-id --review-model other/review-id \
+  --available-opencode-model provider/build-id --available-opencode-model other/review-id \
+  --enable-local-memory --opencode-bin opencode
 # 默认 balanced；需要时显式改为 lean
 ./install.sh --tool opencode --profile lean \
   --migrate-opencode-model-config \
@@ -79,9 +82,16 @@ Cursor 全局 skills 是跨项目共享资产：安装器只按 `policy-v3/gener
 
 - `policy-v3/generated/skills/` → `~/.config/opencode/skills/<skill>/SKILL.md`。
 - 脊柱正文(已剥离 `.mdc` frontmatter)幂等注入 `~/.config/opencode/AGENTS.md`(全局始终加载),用 `<!-- BEGIN agent-workflow-skills spine -->` / `<!-- END agent-workflow-skills spine -->` 标记块包裹。
-- 首次安装用 CLI 明确给 `build` 与 `review`;`reason` 省略即以 JSONC `null` 复用 build。角色配置写入 OpenCode 主配置 `agent` 映射，而不是 bundle Markdown role agent；未命名的 Markdown agent 继承会话模型。之后编辑 `<config-dir>/agent-workflow-skills/model-routing.jsonc` 并带相同 migration flag 重跑，三个角色的 JSON 字段会刷新；review 保持 `edit: deny`。
+- 首次安装用 CLI 明确给 `build` 与 `review`;`reason` 省略即以 JSONC `null` 复用 build。角色配置写入 OpenCode 主配置 `agent` 映射，而不是 bundle Markdown role agent；未命名的 Markdown agent 保持自己的 frontmatter，不会被安装器改写。之后编辑 `<config-dir>/agent-workflow-skills/model-routing.jsonc` 并带相同 migration flag 重跑，三个角色的 JSON 字段会刷新；reason/review 写入 `*: deny`，仅显式允许只读读/搜/skill 能力，实际 enforcement 由 OpenCode host 负责。
 - 默认 config dir 是字面 `~/.config/opencode`;覆盖参数同时适用于 install/uninstall。默认不改主配置并 fail-loud；`--migrate-opencode-model-config` / `-MigrateOpenCodeModelConfig` 是唯一 opt-in。`--opencode-model-config` / `-OpenCodeModelConfig` 可选择 `opencode.json` 或 `opencode.jsonc`；未指定时只能使用唯一现存文件，无文件时创建 JSONC，双文件或损坏内容均拒绝且不改写。
-- 迁移保留非模型 JSON 语义，将原字节备份到 `<config-dir>/agent-workflow-skills/migration-backups/`，并在 `opencode-model-migration.json` 记录前后 SHA-256、binding/config digest 和 role model hash（不记录模型 ID）。它递归检查 `agent/` 与 `agents/`，只会移走 state hash 与 marker 同时证明属于旧 bundle 的命名 role Markdown；同名自定义 agent 会 fail-loud，用户必须先手动重命名或迁移。两个根目录出现同一个规范化 agent 名称也会 fail-loud。其余 Markdown agent（例如 `github-helper`）会递归剥离 `model:`。安装器只验证 review ID 不等于 build/effective-reason;provider 字符串不同不能证明模型家族不同。全部 UTF-8 无 BOM;先临时 staging/校验再替换目标,失败校验不改变既有 bundle 状态。完成后必须重启 OpenCode。
+- 迁移保留非模型 JSON 语义，将原字节备份到 `<config-dir>/agent-workflow-skills/migration-backups/`，并在 `opencode-model-migration.json` 记录前后 SHA-256、binding/config digest 和 role model hash（不记录模型 ID）。它递归检查 `agent/` 与 `agents/`，只会移走 state hash 与 marker 同时证明属于旧 bundle 的命名 role Markdown；同名自定义 agent 会 fail-loud，用户必须先手动重命名或迁移。两个根目录出现同一个规范化 agent 名称也会 fail-loud；其余自定义 OpenCode Markdown agent 原样保留。提供 `-AvailableOpenCodeModel` / `--available-opencode-model` 时，build/effective-reason/review 必须全部在清单中。全部 UTF-8 无 BOM;先临时 staging/校验再替换目标,失败校验不改变既有 bundle 状态。完成后必须重启 OpenCode。
+
+### 本地记忆安全边界
+
+- `-EnableLocalMemory` / `--enable-local-memory` 是唯一启用入口；安装前运行 OpenCode 兼容性 probe，不通过则不写任何配置。
+- SQLite 使用 WAL、full synchronous、独立 global/project namespace、generation rollback 和 bounded FTS5 retrieval；只有操作员可通过 `local_memory.py rollback` 回滚数据库记忆。
+- 不保存原始对话、代码或工具输出，只保存脱敏摘要、置信度、重复次数和证据 hash；秘密、冲突、低置信度候选不进入 active context。
+- 自动更新仅更新 memory 数据；不自动修改 `AGENTS.md`、策略、路由词表、模型、权限或 workflow 源码。
 
 ## 模型路由
 
@@ -107,7 +117,7 @@ Cursor 与 OpenCode binding 完全独立。`all` 安装必须分别提供 `Curso
 
 - **ownership**:`install-state.json` 与 marker 标识本包资产;同名非本包 skill/agent/rule 失败且不覆盖,卸载也保留。
 - **AGENTS.md / CLAUDE.md 脊柱注入**:用标记块定位。若标记块已存在则**原地替换**,否则追加;文件不存在则创建。因此重复运行只会保留**一个**脊柱块,不会累积。文件里标记块以外的内容原样保留。
-- **OpenCode role map**:仅在明确 migration opt-in 时更新 `agent.build/reason/review`;其它 agent 字段保留。三角色 Markdown 文件移出 discovery，其余 Markdown role 的 `model:` 被剥离以继承会话模型。
+- **OpenCode role map**:仅在明确 migration opt-in 时更新 `agent.build/reason/review`;其它 agent 字段保留。三角色 bundle Markdown 文件移出 discovery；自定义 OpenCode Markdown agent 保持原样。
 - **opencode.json / opencode.jsonc**:默认零读取、零改写；迁移模式只选择一个安全路径，拒绝双文件、损坏 JSONC 或已检测到的 reparse/symlink 路径，并留下逐字节 backup 与 SHA audit。排他 lock 与提交前后 identity 检查保护正常并发；具备同一用户目录替换权限的主动本地攻击者超出纯 Python 跨平台实现的保证。
 
 ## 卸载 / 热插拔
@@ -126,7 +136,7 @@ Cursor 与 OpenCode binding 完全独立。`all` 安装必须分别提供 `Curso
 
 - 默认只删除当前项目的 Cursor rule、binding、resolver 与 state，保留跨项目共享的 `~/.cursor/skills`。只有 `-RemoveGlobalSkills` / `--remove-global-skills` 才会在生成内容与 marker 校验通过后删除 bundle global skills；漂移或伪造 marker 会 fail-loud 且不删除。
 - 移除 `AGENTS.md` / `CLAUDE.md` 里的脊柱标记块,保留文件其余内容。
-- 只删除 audit 证明仍由本包管理的 OpenCode `agent.build/reason/review` 字段；字段漂移时保留用户改动，且绝不恢复 Markdown `model:` 硬编码。迁移 backup 保留在机器本地，供人工审计或回滚检查。
+- 只删除 audit 证明仍由本包管理的 OpenCode `agent.build/reason/review` 字段和 local-memory plugin；字段漂移时保留用户改动，且绝不恢复 Markdown `model:` 硬编码。迁移 backup 与本地记忆数据库保留在机器本地，供人工审计或回滚检查。
 - `-Project` 给定时删掉 `<repo>\.cursor\rules\workflow-gate.mdc`。
 - OpenCode 主配置不会被删除；仅在显式 migration 后由 uninstall 删除校验通过的受管角色字段。
 - 已不存在的项直接跳过,不报错。

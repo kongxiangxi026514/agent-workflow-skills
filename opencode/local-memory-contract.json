@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "minimum_opencode_version": "1.1.1",
+  "required_hooks": [
+    "chat.message",
+    "event",
+    "experimental.chat.system.transform",
+    "experimental.session.compacting"
+  ],
+  "required_events": [
+    "session.idle",
+    "session.deleted"
+  ],
+  "forbidden_capture": [
+    "tool.execute.after",
+    "raw_prompt",
+    "tool_output",
+    "source_code"
+  ]
+}

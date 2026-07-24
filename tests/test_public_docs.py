@@ -105,6 +105,25 @@ class PublicDocumentationTests(unittest.TestCase):
             self.assertIn(f"`{skill}`", install)
         self.assertNotIn("`skills/*`", install)
 
+    def test_docs_explain_opt_in_local_memory_and_registry_validation(self):
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        install = (ROOT / "INSTALL.md").read_text(encoding="utf-8")
+        routing = (ROOT / "config" / "model-routing.md").read_text(encoding="utf-8")
+        combined = readme + install + routing
+        for text in (
+            "-EnableLocalMemory",
+            "--enable-local-memory",
+            "-AvailableOpenCodeModel",
+            "--available-opencode-model",
+            "SQLite",
+            "WAL",
+            "不保存原始对话",
+            "AGENTS.md",
+            "不自动修改",
+            "自定义 OpenCode Markdown agent",
+        ):
+            self.assertIn(text, combined)
+
 
 if __name__ == "__main__":
     unittest.main()

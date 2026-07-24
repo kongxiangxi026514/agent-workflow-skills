@@ -75,5 +75,26 @@
     "paths": ["docs/guide.md"],
     "forbidden_policies": ["P05"],
     "max_risk": "R0"
+  },
+  {
+    "id": "chinese-review-wording",
+    "text": "审查这句文案的语气。",
+    "paths": ["README.md"],
+    "forbidden_policies": ["P04"],
+    "max_risk": "R0"
+  },
+  {
+    "id": "chinese-parallel-lines",
+    "text": "解释这两条平行线为什么不相交。",
+    "paths": ["docs/math.md"],
+    "forbidden_policies": ["P05"],
+    "max_risk": "R0"
+  },
+  {
+    "id": "chinese-security-typo",
+    "text": "快速修复 README 中 security 的错别字。",
+    "paths": ["README.md"],
+    "forbidden_policies": ["P01", "P04"],
+    "max_risk": "R0"
   }
 ]

@@ -12,6 +12,9 @@ PROJECT=""
 OPENCODE_CONFIG_DIR=""
 OPENCODE_MODEL_CONFIG=""
 MIGRATE_OPENCODE_MODEL_CONFIG=0
+ENABLE_LOCAL_MEMORY=0
+OPENCODE_BIN="${AGENT_WORKFLOW_OPENCODE_BIN:-opencode}"
+AVAILABLE_OPENCODE_MODELS=()
 PROFILE=""
 PROFILE_SET=0
 GENERIC_BUILD_MODEL=""
@@ -35,6 +38,11 @@ while [ $# -gt 0 ]; do
     --opencode-model-config) OPENCODE_MODEL_CONFIG="${2:-}"; shift 2 ;;
     --opencode-model-config=*) OPENCODE_MODEL_CONFIG="${1#*=}"; shift ;;
     --migrate-opencode-model-config) MIGRATE_OPENCODE_MODEL_CONFIG=1; shift ;;
+    --enable-local-memory) ENABLE_LOCAL_MEMORY=1; shift ;;
+    --opencode-bin) OPENCODE_BIN="${2:-}"; shift 2 ;;
+    --opencode-bin=*) OPENCODE_BIN="${1#*=}"; shift ;;
+    --available-opencode-model) AVAILABLE_OPENCODE_MODELS+=("${2:-}"); shift 2 ;;
+    --available-opencode-model=*) AVAILABLE_OPENCODE_MODELS+=("${1#*=}"); shift ;;
     --profile) PROFILE="${2:-}"; PROFILE_SET=1; shift 2 ;;
     --profile=*) PROFILE="${1#*=}"; PROFILE_SET=1; shift ;;
     --build-model) GENERIC_BUILD_MODEL="${2:-}"; shift 2 ;;
@@ -105,10 +113,11 @@ resolve_python() {
 }
 
 new_install_stage() {
-  binding="$1"; platform="$2"; profile="$3"; build="$4"; reason="$5"; review="$6"; stage="$(mktemp -d)"
+  binding="$1"; platform="$2"; profile="$3"; build="$4"; reason="$5"; review="$6"; memory="$7"; stage="$(mktemp -d)"
   python_cmd="$(resolve_python)"
-  if ! "$python_cmd" "$REPO_ROOT/tools/prepare_install.py" "$stage" "$binding" \
-    "$platform" "$profile" "${build:--}" "${reason:--}" "${review:--}" >/dev/null; then
+  args=("$REPO_ROOT/tools/prepare_install.py" "$stage" "$binding" "$platform" "$profile" "${build:--}" "${reason:--}" "${review:--}")
+  [ "$memory" = 1 ] && args+=(--enable-local-memory)
+  if ! "$python_cmd" "${args[@]}" >/dev/null; then
     rm -rf "$stage"; return 1
   fi
   printf '%s\n' "$stage"
@@ -243,6 +252,15 @@ preflight_opencode_model_migration() {
     --audit "$OPENCODE_BASE/agent-workflow-skills/opencode-model-migration.json" \
     --stage "$OPENCODE_STAGE" --check)
   [ -z "$OPENCODE_MODEL_CONFIG" ] || migration+=(--opencode-model-config "$OPENCODE_MODEL_CONFIG")
+  for model in "${AVAILABLE_OPENCODE_MODELS[@]}"; do migration+=(--available-model "$model"); done
+  if [ -f "$OPENCODE_STAGE/plugins/agent-workflow-memory.ts" ]; then
+    migration+=(--enable-local-memory)
+    "$python_cmd" "$OPENCODE_STAGE/verify_opencode_memory_plugin.py" \
+      --plugin "$OPENCODE_STAGE/plugins/agent-workflow-memory.ts" \
+      --contract "$OPENCODE_STAGE/plugins/local-memory-contract.json" \
+      --opencode-bin "$OPENCODE_BIN" --require-runtime ||
+      { echo "OpenCode local-memory compatibility probe failed. Nothing was installed." >&2; return 1; }
+  fi
   "$python_cmd" "$REPO_ROOT/tools/migrate_opencode_models.py" "${migration[@]}" ||
     { echo "OpenCode model config migration preflight failed. Nothing was installed." >&2; return 1; }
 }
@@ -270,12 +288,15 @@ install_opencode() {
     --audit "$base/agent-workflow-skills/opencode-model-migration.json" \
     --stage "$OPENCODE_STAGE")
   [ -z "$OPENCODE_MODEL_CONFIG" ] || migration+=(--opencode-model-config "$OPENCODE_MODEL_CONFIG")
+  for model in "${AVAILABLE_OPENCODE_MODELS[@]}"; do migration+=(--available-model "$model"); done
+  [ ! -f "$OPENCODE_STAGE/plugins/agent-workflow-memory.ts" ] || migration+=(--enable-local-memory)
   "$python_cmd" "$REPO_ROOT/tools/migrate_opencode_models.py" "${migration[@]}" ||
     { echo "OpenCode installation transaction failed; OpenCode config changes were rolled back." >&2; return 1; }
   SUMMARY+=("opencode: skills -> $base/skills")
   SUMMARY+=("opencode: spine injected -> $base/AGENTS.md (marker block)")
   SUMMARY+=("opencode: model binding -> $base/agent-workflow-skills/model-routing.jsonc")
   SUMMARY+=("opencode: role models -> selected JSON/JSONC config (audited migration)")
+  [ ! -f "$OPENCODE_STAGE/plugins/agent-workflow-memory.ts" ] || SUMMARY+=("opencode: local-only transactional memory plugin enabled")
 }
 
 install_claude() {
@@ -335,7 +356,7 @@ if [ "$TOOL" = opencode ] || [ "$TOOL" = all ]; then
   preflight_opencode
   assert_spine_markers "$OPENCODE_BASE/AGENTS.md"
   verify_policy_ownership "$OPENCODE_BASE/agent-workflow-skills/install-state.json" "$OPENCODE_BASE/AGENTS.md" "$OPENCODE_BASE/skills" 1
-  OPENCODE_STAGE="$(new_install_stage "$OPENCODE_BASE/agent-workflow-skills/model-routing.jsonc" opencode "$(profile_for opencode)" "$OPENCODE_BUILD_MODEL" "$OPENCODE_REASON_MODEL" "$OPENCODE_REVIEW_MODEL")"
+  OPENCODE_STAGE="$(new_install_stage "$OPENCODE_BASE/agent-workflow-skills/model-routing.jsonc" opencode "$(profile_for opencode)" "$OPENCODE_BUILD_MODEL" "$OPENCODE_REASON_MODEL" "$OPENCODE_REVIEW_MODEL" "$ENABLE_LOCAL_MEMORY")"
   preflight_opencode_model_migration "$OPENCODE_STAGE/model-routing.jsonc"
 fi
 if [ "$TOOL" = cursor ] || [ "$TOOL" = all ]; then
@@ -351,14 +372,14 @@ if [ "$TOOL" = cursor ] || [ "$TOOL" = all ]; then
       echo "Cursor rule already exists and is not bundle-owned: $path" >&2; exit 1
     fi
   done
-  CURSOR_STAGE="$(new_install_stage "$binding" cursor "$(profile_for cursor)" "$CURSOR_BUILD_MODEL" "$CURSOR_REASON_MODEL" "$CURSOR_REVIEW_MODEL")"
+  CURSOR_STAGE="$(new_install_stage "$binding" cursor "$(profile_for cursor)" "$CURSOR_BUILD_MODEL" "$CURSOR_REASON_MODEL" "$CURSOR_REVIEW_MODEL" 0)"
 fi
 if [ "$TOOL" = claude ] || [ "$TOOL" = all ]; then
   CLAUDE_BASE="$HOME/.claude"
   assert_spine_markers "$CLAUDE_BASE/CLAUDE.md"
   preflight_skills "$CLAUDE_BASE/skills"
   verify_policy_ownership "$CLAUDE_BASE/agent-workflow-skills/install-state.json" "$CLAUDE_BASE/CLAUDE.md" "$CLAUDE_BASE/skills" 1
-  CLAUDE_STAGE="$(new_install_stage "$CLAUDE_BASE/agent-workflow-skills/model-routing.jsonc" claude "$(profile_for claude)" "" "" "")"
+  CLAUDE_STAGE="$(new_install_stage "$CLAUDE_BASE/agent-workflow-skills/model-routing.jsonc" claude "$(profile_for claude)" "" "" "" 0)"
 fi
 
 case "$TOOL" in
